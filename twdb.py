@@ -855,20 +855,25 @@ class DB:
                  (name, course, day))
 
     def add_tourney(self, persona, day, course, fields, event=''):
-        """Record a tournament round.  One per player per day -- a second
-        report for the same day replaces the first, which is what happens when
-        a player replays an event."""
+        """Record a tournament round.  One per player per day, and it is the
+        player's BEST: a replay only replaces the stored round when it took
+        fewer strokes (Jed, 2026-09-24 -- a 55 then a 58 must leave the 55).
+        Returns the strokes that now count for the player on that day."""
         par = twtourney.card_par(fields) or 0
         self.run('INSERT INTO tourney (persona, day, course, strokes, event,'
                  ' par, fields, received) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
                  ' ON CONFLICT(persona, day) DO UPDATE SET'
                  ' course=excluded.course, strokes=excluded.strokes,'
                  ' event=excluded.event, par=excluded.par,'
-                 ' fields=excluded.fields, received=excluded.received',
+                 ' fields=excluded.fields, received=excluded.received'
+                 ' WHERE excluded.strokes < tourney.strokes',
                  (persona, day, course, fields.get('STROKES', 0), event, par,
                   json.dumps(fields), time.time()))
         if par:
             self.note_par(course, par)
+        row = self.one('SELECT strokes FROM tourney WHERE persona = ? AND'
+                       ' day = ?', (persona, day))
+        return row['strokes'] if row else fields.get('STROKES', 0)
 
     # -- what a course is worth --------------------------------------------
     def note_par(self, course, bound):

@@ -1607,26 +1607,36 @@ class Handler(socketserver.BaseRequestHandler):
         # without this, a player could enter today's event and have the result
         # recorded against any date they liked.
         event = DB.event(issued_day)
-        DB.add_tourney(who, issued_day,
-                       event['course'] if event else course, fields,
-                       event=event['name'] if event else '')
+        # Only a player's lowest round of the day counts; a worse replay is
+        # acknowledged but leaves the standing score alone.
+        best = DB.add_tourney(who, issued_day,
+                              event['course'] if event else course, fields,
+                              event=event['name'] if event else '')
+        kept = (' (best of the day %d stands)' % best
+                if best != fields['STROKES'] else '')
         place, entrants = DB.tourney_place(who, issued_day)
-        log('***', '    %s scored %d over %d holes on %s -- %s of %d'
+        log('***', '    %s scored %d over %d holes on %s%s -- %s of %d'
             % (who, fields['STROKES'], fields['HOLES'],
-               twtourney.from_day(issued_day), _ordinal(place), entrants))
-        note('round', '%s posted %d at %s%s -- %s of %d'
+               twtourney.from_day(issued_day), kept, _ordinal(place), entrants))
+        note('round', '%s posted %d at %s%s%s -- %s of %d'
              % (who, fields['STROKES'],
                 twstats.course_name(event['course'] if event else course),
                 (' in the %s' % event['name']) if event and event['name'] else '',
-                _ordinal(place), entrants), who=who)
+                kept, _ordinal(place), entrants), who=who)
         publish_live()
         if issued_day != day:
             log('!!!', '    %s started %s but reported %s -- recorded against '
                        'the day it started'
                 % (who, twtourney.from_day(issued_day),
                    twtourney.from_day(day)))
-        message = 'Your round of %d is recorded.%sYou are %s of %d.' % (
-            fields['STROKES'], chr(10), _ordinal(place), entrants)
+        if best != fields['STROKES']:
+            message = ('Your round of %d is recorded, but your best of %d '
+                       'still counts.%sYou are %s of %d.' % (
+                           fields['STROKES'], best, chr(10), _ordinal(place),
+                           entrants))
+        else:
+            message = 'Your round of %d is recorded.%sYou are %s of %d.' % (
+                fields['STROKES'], chr(10), _ordinal(place), entrants)
         self.send('cusr', ident, raw=message.encode('ascii'))
 
     def on_cusr(self, ident, tags):
