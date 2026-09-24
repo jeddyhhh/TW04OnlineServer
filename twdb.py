@@ -131,11 +131,12 @@ CREATE TABLE IF NOT EXISTS results (
 -- at it -- a round recorded at Torrey Pines has to stay a round at Torrey
 -- Pines even if the generator is changed afterwards.
 CREATE TABLE IF NOT EXISTS events (
-    day     INTEGER PRIMARY KEY,
-    name    TEXT NOT NULL,
-    course  INTEGER NOT NULL DEFAULT 0,
-    purse   INTEGER NOT NULL DEFAULT 0,
-    created REAL NOT NULL
+    day        INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL,
+    course     INTEGER NOT NULL DEFAULT 0,
+    purse      INTEGER NOT NULL DEFAULT 0,
+    created    REAL NOT NULL,
+    conditions TEXT NOT NULL DEFAULT ''
 );
 
 -- A tournament round, one per player per event day.  Unlike a head-to-head
@@ -363,6 +364,10 @@ class DB:
         # The par the card implies, cached so a course's par is one GROUP BY
         # rather than a JSON parse per row.  0 means "this card cannot say".
         ('tourney', 'par', 'INTEGER NOT NULL DEFAULT 0'),
+        # An event's tees / rough / fairways / greens, as JSON {setting:
+        # option}.  '' reads as the game's defaults, which is exactly what
+        # every event stored before this column existed was played on.
+        ('events', 'conditions', "TEXT NOT NULL DEFAULT ''"),
     ]
 
     def _migrate(self):
@@ -774,7 +779,16 @@ class DB:
         rows = self.query('SELECT * FROM events WHERE day >= ? AND day < ?'
                           ' ORDER BY day ASC', (start, start + count))
         return [{'day': r['day'], 'name': r['name'], 'course': r['course'],
-                 'purse': r['purse']} for r in rows]
+                 'purse': r['purse'],
+                 'conditions': self._conditions(_col(r, 'conditions', ''))}
+                for r in rows]
+
+    @staticmethod
+    def _conditions(text):
+        try:
+            return json.loads(text) if text else {}
+        except ValueError:
+            return {}
 
     def event(self, day):
         rows = self.events(day, 1)
@@ -792,9 +806,11 @@ class DB:
         never rewrite an event somebody has already played."""
         now = time.time()
         self.run_many(
-            'INSERT OR IGNORE INTO events (day, name, course, purse, created)'
-            ' VALUES (?, ?, ?, ?, ?)',
-            [(e['day'], e['name'], e['course'], e['purse'], now)
+            'INSERT OR IGNORE INTO events (day, name, course, purse, created,'
+            ' conditions) VALUES (?, ?, ?, ?, ?, ?)',
+            [(e['day'], e['name'], e['course'], e['purse'], now,
+              json.dumps(e['conditions'], sort_keys=True)
+              if e.get('conditions') else '')
              for e in events])
 
     def events_with_course(self, courses, from_day=0):
@@ -807,6 +823,31 @@ class DB:
                           (from_day,) + tuple(courses))
         return [{'day': r['day'], 'name': r['name'], 'course': r['course'],
                  'purse': r['purse']} for r in rows]
+
+    def refresh_events(self, from_day, plan):
+        """Bring scheduled events from `from_day` on up to the current rules,
+        for days nobody has played yet.  `plan(event)` gets the stored event
+        ({day, course, purse, conditions}) and returns (conditions, purse).
+        Returns [(event, conditions, purse)] for the ones that changed.
+
+        A day with a round on it keeps everything: the money list pays out of
+        its purse, and its rounds were played on its conditions, so changing
+        either would rewrite what happened.  Past days are left alone for the
+        same reason."""
+        played = {r['day'] for r in self.query(
+            'SELECT DISTINCT day FROM tourney WHERE day >= ?', (from_day,))}
+        changed = []
+        for event in self.events(from_day, 1 << 16):
+            if event['day'] in played:
+                continue
+            conditions, purse = plan(event)
+            if conditions != event['conditions'] or purse != event['purse']:
+                changed.append((event, conditions, purse))
+        self.run_many(
+            'UPDATE events SET conditions = ?, purse = ? WHERE day = ?',
+            [(json.dumps(c, sort_keys=True) if c else '', p, e['day'])
+             for e, c, p in changed])
+        return changed
 
     def replace_event(self, day, name, course):
         """Change one scheduled event, keeping its purse."""

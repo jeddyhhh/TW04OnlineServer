@@ -304,6 +304,42 @@ def make_entry(name, day, purse=0, course=0, width=DATA_BYTES, data=None,
 UNPLAYABLE_COURSES = (7, 21, 23, 24, 25, 26, 27, 28, 29)
 TOURNEY_COURSES = tuple(c for c in range(30) if c not in UNPLAYABLE_COURSES)
 
+# The tournament courses, HARDEST FIRST.  From course_difficulty.json (CPU
+# versus CPU averages), in its order but for one correction: the file has Bay
+# Hill Club first, and it is nearer ninth.  The rank alone sets the purse --
+# the file's numbers do not quite follow its own order, and the order is what
+# was reviewed.  Every course in TOURNEY_COURSES must be here; the self-test
+# checks it.
+DIFFICULTY_ORDER = (
+    'Emerald Dragon', 'The Predator', 'Wallaby Creek', 'The Highlands',
+    'Penguin Falls', 'Black Rock Cove', 'TPC at Sawgrass', 'Bethpage Black',
+    'Bay Hill Club', "Tiger's Dream 18", 'Princeville Resort', 'Sahalee CC',
+    'Torrey Pines', 'Royal Birkdale', 'St Andrews', 'Poppy Hills',
+    'Spyglass Hill', 'Kapalua Plantation', 'Pebble Beach', 'Pinehurst No. 2',
+    'TPC of Scottsdale',
+)
+PURSE_TOP = 5000000              # the hardest course
+PURSE_BOTTOM = 2000000           # the easiest
+PURSE_ROUND = 50000
+
+
+def course_purse(course):
+    """An event's purse from its course: $5,000,000 for the hardest, down in
+    equal steps to $2,000,000 for the easiest, to the nearest $50,000.
+
+    Event CONDITIONS (holes, tees, rough, fairways, greens) will weigh in too
+    once the entry bytes that set them are mapped -- until then every event
+    plays the game's defaults, so the course is the whole story.  A course not
+    in the ranking gets the middle of the range rather than an error: a purse
+    is not worth refusing to schedule an event over."""
+    import twstats                       # twstats imports nothing from here
+    name = twstats.course_name(course)
+    if name not in DIFFICULTY_ORDER:
+        return int(round((PURSE_TOP + PURSE_BOTTOM) / 2.0 / PURSE_ROUND)) * PURSE_ROUND
+    rank = DIFFICULTY_ORDER.index(name)
+    step = (PURSE_TOP - PURSE_BOTTOM) / float(len(DIFFICULTY_ORDER) - 1)
+    return int(round((PURSE_TOP - rank * step) / PURSE_ROUND)) * PURSE_ROUND
+
 EVENT_NAMES = ('Open', 'Classic', 'Invitational', 'Championship', 'Masters',
                'Challenge', 'Cup')
 
@@ -358,8 +394,15 @@ def generate_month(year, month, courses=None):
             rng.shuffle(pool)
         course = pool.pop()
         cname = courses[course] if courses and course < len(courses) else None
-        purse = rng.randrange(500000, 5000001, 50000)
+        # The purse is the course's (course_purse).  The random draw that used
+        # to set it is still made and thrown away: removing it would shift
+        # every later draw, so a month regenerated from scratch would no longer
+        # be the month that was stored -- different courses and names on days
+        # people have already seen.
+        rng.randrange(500000, 5000001, 50000)
         day = first + i
+        conditions = event_conditions(day)
+        purse = event_purse(course, conditions)
         # A date with an icon made for it gets that icon, and takes its name
         # from the day rather than the rotation -- "Christmas at Pebble Beach"
         # says more than "Pebble Beach Masters", and the icon on the calendar
@@ -381,7 +424,7 @@ def generate_month(year, month, courses=None):
             joined = '%s at %s' % (special[1], cname) if cname else special[1]
             name = joined if len(joined) <= NAME_MAX else special[1]
         out.append({'day': day, 'name': name[:NAME_MAX], 'course': course,
-                    'purse': purse, 'icon': icon})
+                    'purse': purse, 'icon': icon, 'conditions': conditions})
     return out
 
 
@@ -412,8 +455,11 @@ def entries_for(events):
         if icon is None:
             special = holiday(e['day'])
             icon = special[0] if special else ICON_DEFAULT
+        data = bytearray(DATA_BYTES)
+        struct.pack_into('<I', data, CONDITIONS_OFFSET,
+                         conditions_word(full_conditions(e.get('conditions'))))
         out.append(make_entry(e['name'], e['day'], e['purse'], e['course'],
-                              icon=icon))
+                              data=data, icon=icon))
     return out
 
 
@@ -471,6 +517,175 @@ def probe_bytes(count, start, purse=1000000, course=14, after=None):
             data, name = bytearray(DATA_BYTES), 'CLEAN'
         entries.append(make_entry(name, day, purse, course, data=data))
     return entries
+
+
+# THE EVENT CONDITIONS are one-hot flags in the little-endian word at data
+# byte 8 (entry +0x28), read by one getter per setting at 0x002DFFD0..
+# 0x002E0230 and drawn on UPCOMING EVENT from the text tables beside them
+# (0x002FAD40 for holes, 0x00316EF0.. for the rest).  No flag is the default,
+# which is what every event showed until now: All 18, Black, Average, Slow,
+# Medium.  Order matters only when two flags of one setting are set -- the
+# getter tests them in the order listed here, and the first wins.
+#
+#   holes     0x002DFFD0   bit 0 Front 9, bit 1 Back 9          (Par 3's etc. in
+#                          the table are unreachable from here)
+#   tees      0x002E0000   bit 3 White, bit 4 Blue              (Red unreachable)
+#   rough     0x002E00E0   bit 13 Short, bit 15 Long
+#   fairways  0x002E0030   bit 18 Fast, bit 17 Medium           (probe-confirmed:
+#                          byte 10 = 2 or 3 drew Medium)
+#   greens    0x002E00B0   bit 10 Slow, bit 12 Fast
+#
+# Three more are applied when an event starts (0x002DEB30) but never drawn,
+# and nothing names them: bits 7-9 -> 0x00326E84, bits 19-25 -> 0x0032178A
+# (default 4), bits 26-29 -> 0x0032178B.  Left at their defaults.  Bit 11 of
+# the word at data byte 4 is tested alone at 0x002E0630 -- the likeliest
+# "invitation only" flag (45.6).
+CONDITIONS_OFFSET = 8
+CONDITIONS = {
+    'holes':    {'All 18': 0, 'Front 9': 1 << 0, 'Back 9': 1 << 1},
+    'tees':     {'Black': 0, 'White': 1 << 3, 'Blue': 1 << 4},
+    'rough':    {'Average': 0, 'Short': 1 << 13, 'Long': 1 << 15},
+    'fairways': {'Slow': 0, 'Medium': 1 << 17, 'Fast': 1 << 18},
+    'greens':   {'Medium': 0, 'Slow': 1 << 10, 'Fast': 1 << 12},
+}
+DEFAULT_CONDITIONS = {k: next(n for n, bit in v.items() if not bit)
+                      for k, v in CONDITIONS.items()}
+INVITATION_FLAG = (4, 1 << 11)       # (data byte of the word, bit) -- unconfirmed
+
+
+def conditions_word(conditions):
+    """{'tees': 'White', 'greens': 'Fast', ...} -> the u32 for data byte 8.
+    Anything not named is the default; an unknown value is an error, because
+    a typo would otherwise quietly become the default."""
+    word = 0
+    for setting, value in (conditions or {}).items():
+        word |= CONDITIONS[setting][value]
+    return word
+
+
+# The settings an Online Tournament event varies.  Holes is not one of them:
+# a tournament round is always All 18 (the default, no flag), so its flags are
+# documented above but never set.
+EVENT_SETTINGS = ('tees', 'rough', 'fairways', 'greens')
+
+# What each option does to an event's purse, on top of its course purse.
+# Agreed with the operator; the harder the setting, the bigger the prize.  The
+# defaults are not all 1.00 -- Black tees are the hardest there are, and the
+# game's own default -- so an event on untouched settings pays a little over
+# its course purse.
+PURSE_MULTIPLIERS = {
+    'tees':     {'Black': 1.10, 'Blue': 1.00, 'White': 0.90},
+    'rough':    {'Short': 0.95, 'Average': 1.00, 'Long': 1.10},
+    'fairways': {'Slow': 0.97, 'Medium': 1.00, 'Fast': 1.05},
+    'greens':   {'Slow': 0.95, 'Medium': 1.00, 'Fast': 1.10},
+}
+# How often an event keeps each setting's default; the rest is split evenly
+# between the other options.  Half and half keeps most days recognisable while
+# still giving a hard day now and then.
+CONDITION_DEFAULT_CHANCE = 0.5
+
+
+def event_conditions(day):
+    """The conditions for the event on `day`: {setting: option} for each of
+    EVENT_SETTINGS.  Seeded from the day alone, NOT from the month's generator
+    -- adding this must not shift a single course or name in a calendar that
+    is already stored -- so the same day always gets the same conditions."""
+    rng = random.Random('TW04 conditions %d' % day)
+    out = {}
+    for setting in EVENT_SETTINGS:
+        default = DEFAULT_CONDITIONS[setting]
+        others = sorted(o for o in CONDITIONS[setting] if o != default)
+        out[setting] = (default if rng.random() < CONDITION_DEFAULT_CHANCE
+                        else rng.choice(others))
+    return out
+
+
+def full_conditions(conditions):
+    """Every EVENT_SETTING named, defaults filled in -- so a stored event with
+    no conditions (one made before they existed) reads as what it was."""
+    out = {s: DEFAULT_CONDITIONS[s] for s in EVENT_SETTINGS}
+    out.update({k: v for k, v in (conditions or {}).items() if k in out})
+    return out
+
+
+def event_purse(course, conditions=None):
+    """course_purse, times each setting's multiplier, to the nearest $50,000."""
+    factor = 1.0
+    for setting, option in full_conditions(conditions).items():
+        factor *= PURSE_MULTIPLIERS[setting][option]
+    return int(round(course_purse(course) * factor / PURSE_ROUND)) * PURSE_ROUND
+
+
+SETTING_LABELS = {'tees': 'Tees', 'rough': 'Rough', 'fairways': 'Fairways',
+                  'greens': 'Greens'}
+
+
+def condition_items(conditions):
+    """[(label, option, is_default)] for every EVENT_SETTING, in the order the
+    UPCOMING EVENT screen draws them -- for showing ALL of an event's settings,
+    not just the ones that differ from the game's defaults."""
+    full = full_conditions(conditions)
+    return [(SETTING_LABELS[s], full[s], full[s] == DEFAULT_CONDITIONS[s])
+            for s in EVENT_SETTINGS]
+
+
+def describe_conditions(conditions):
+    """For people: the settings that differ from the game's defaults, or
+    'Standard conditions'.  'Long rough, fast greens'."""
+    words = {'tees': '%s tees', 'rough': '%s rough', 'fairways': '%s fairways',
+             'greens': '%s greens'}
+    parts = [words[s] % o.lower()
+             for s, o in full_conditions(conditions).items()
+             if o != DEFAULT_CONDITIONS[s]]
+    if not parts:
+        return 'Standard conditions'
+    text = ', '.join(parts)
+    return text[0].upper() + text[1:]
+
+
+# The confirmation calendar: one setting per day, each NAMED for what
+# UPCOMING EVENT should then draw, so checking is "does the line match the
+# name".  Built from CONDITIONS, so it checks the very table events will use.
+PROBE_PLAN = (
+    [('BASELINE', {})]
+    + [('%s %s' % (s.upper(), v.upper()), {s: v})
+       for s in EVENT_SETTINGS for v, bit in CONDITIONS[s].items() if bit]
+    + [('ALL HARD', {'tees': 'Black', 'rough': 'Long', 'fairways': 'Fast',
+                     'greens': 'Fast'}),
+       ('INVITE FLAG', 'invite')]
+)
+
+
+def probe_condition_for(day, anchor):
+    """(name, conditions) the confirmation calendar puts on `day`, or None
+    for an ordinary clean day.  A pure function of the day, so every request
+    -- the calendar asks a month at a time -- sees the same layout: today is
+    clean and playable, the plan starts tomorrow."""
+    index = day - anchor - 1
+    if 0 <= index < len(PROBE_PLAN):
+        return PROBE_PLAN[index]
+    return None
+
+
+def probe_conditions(count, start, anchor=None, purse=1000000, course=0):
+    """The confirmation calendar (PROBE_PLAN) for `count` days from `start`."""
+    anchor = today() if anchor is None else anchor
+    out = []
+    for day in range(start, start + count):
+        data = bytearray(DATA_BYTES)
+        probe = probe_condition_for(day, anchor)
+        if probe is None:
+            name = 'CLEAN'
+        else:
+            name, conds = probe
+            if conds == 'invite':
+                where, bit = INVITATION_FLAG
+                struct.pack_into('<I', data, where, bit)
+            else:
+                struct.pack_into('<I', data, CONDITIONS_OFFSET,
+                                 conditions_word(conds))
+        out.append(make_entry(name, day, purse, course, data=data))
+    return out
 
 
 def probe_days(count, start):
@@ -630,14 +845,25 @@ def main():
             fails.append('entry %d lost the course' % i)
         if struct.unpack_from('<H', data, DAY_OFFSET)[0] != ev['day']:
             fails.append('entry %d lost the day' % i)
-        # Nothing STILL unknown may be set: one of those bytes marks an event
-        # "invitation only" and turns on a password prompt.  Bytes 4..11 are
-        # the ones left; 15 is the icon and is set on purpose.
+        # Nothing still unknown may be set: bytes 4..7 hold the likely
+        # "invitation only" flag, which turns on a password prompt.  Bytes
+        # 8..11 are the conditions word (section 63) and may carry ONLY the
+        # flags in CONDITIONS -- never one of the three unnamed settings.
         spare = [k for k in range(DATA_BYTES)
                  if k not in (0, 1, 2, 3, DAY_OFFSET, DAY_OFFSET + 1,
-                              COURSE_OFFSET, ICON_OFFSET) and b_[k]]
+                              COURSE_OFFSET, ICON_OFFSET)
+                 and not CONDITIONS_OFFSET <= k < CONDITIONS_OFFSET + 4
+                 and b_[k]]
         if spare:
             fails.append('entry %d set unknown bytes %s' % (i, spare))
+        known = 0
+        for flags in CONDITIONS.values():
+            for bit in flags.values():
+                known |= bit
+        word = struct.unpack_from('<I', data, CONDITIONS_OFFSET)[0]
+        if word & ~known:
+            fails.append('entry %d set condition bits nothing names: 0x%08x'
+                         % (i, word & ~known))
     # One day taken on its own must be the same event as that day in the month,
     # or a player would start one event and be scored in another.
     mine = [e for e in events if e['day'] == day]
@@ -645,6 +871,92 @@ def main():
         fails.append('one day does not match its place in the month')
     if any(e['purse'] % 50000 for e in events):
         fails.append('purses should be round numbers')
+
+    # 7a1. the confirmation calendar: the same layout however the calendar is
+    #      asked, each day carrying exactly the flags its name promises
+    anchor = to_day(datetime.date(2026, 9, 24))
+    got = {}
+    for first, n in ((to_day(datetime.date(2026, 9, 1)), 30),
+                     (to_day(datetime.date(2026, 10, 1)), 31)):
+        for name, data in probe_conditions(n, first, anchor):
+            day = struct.unpack_from('<H', data, DAY_OFFSET)[0]
+            got[day] = (name, struct.unpack_from('<I', data, CONDITIONS_OFFSET)[0],
+                        struct.unpack_from('<I', data, INVITATION_FLAG[0])[0])
+    planned = [got.get(anchor + 1 + i) for i in range(len(PROBE_PLAN))]
+    for (name, conds), seen in zip(PROBE_PLAN, planned):
+        want = ((name, 0, INVITATION_FLAG[1]) if conds == 'invite'
+                else (name, conditions_word(conds), 0))
+        if seen != want:
+            fails.append('probe day %r carries %r, expected %r' % (name, seen, want))
+    if got.get(anchor, ('',))[0] != 'CLEAN' or got.get(anchor + len(PROBE_PLAN) + 1,
+                                                      ('',))[0] != 'CLEAN':
+        fails.append('today and the days after the plan must be clean')
+    if conditions_word({'fairways': 'Medium'}) >> 16 != 2:
+        fails.append('fairways Medium must be byte 10 = 2, as the probe drew')
+    try:
+        conditions_word({'tees': 'Red'})
+        fails.append('an option the client cannot reach must be refused')
+    except KeyError:
+        pass
+    print('probe:   %d confirmation days from %s'
+          % (len(PROBE_PLAN), from_day(anchor + 1)))
+
+    # 7a2. purses follow course difficulty
+    import twstats
+    unranked = [twstats.course_name(c) for c in TOURNEY_COURSES
+                if twstats.course_name(c) not in DIFFICULTY_ORDER]
+    if unranked:
+        fails.append('tournament courses missing from DIFFICULTY_ORDER: %r'
+                     % unranked)
+    ladder = [course_purse(twstats.COURSES.index(n)) for n in DIFFICULTY_ORDER]
+    if ladder[0] != PURSE_TOP or ladder[-1] != PURSE_BOTTOM:
+        fails.append('the hardest should pay %d and the easiest %d, got %d / %d'
+                     % (PURSE_TOP, PURSE_BOTTOM, ladder[0], ladder[-1]))
+    if any(a <= b for a, b in zip(ladder, ladder[1:])):
+        fails.append('a harder course must always pay more: %r' % ladder)
+    if DIFFICULTY_ORDER.index('Bay Hill Club') != 8:
+        fails.append('Bay Hill Club is the 9th hardest')
+    wrong = [e for e in events
+             if e['purse'] != event_purse(e['course'], e['conditions'])]
+    if wrong:
+        fails.append('%d generated events do not carry their course and '
+                     'conditions purse' % len(wrong))
+
+    # 7a3. conditions: valid, stable per day, on the wire, and priced
+    for e in events:
+        c = e['conditions']
+        if set(c) != set(EVENT_SETTINGS) or any(
+                c[s] not in CONDITIONS[s] for s in c):
+            fails.append('bad conditions on day %d: %r' % (e['day'], c))
+        if event_conditions(e['day']) != c:
+            fails.append('conditions must be the same every time for a day')
+    for (name, data), e in zip(entries_for(events), sorted(
+            events, key=lambda e: e['day'])):
+        if struct.unpack_from('<I', data, CONDITIONS_OFFSET)[0] != \
+                conditions_word(e['conditions']):
+            fails.append('%s: the conditions did not reach the entry' % name)
+            break
+    hard = {'tees': 'Black', 'rough': 'Long', 'fairways': 'Fast', 'greens': 'Fast'}
+    easy = {'tees': 'White', 'rough': 'Short', 'fairways': 'Slow', 'greens': 'Slow'}
+    top = twstats.COURSES.index(DIFFICULTY_ORDER[0])
+    if not event_purse(top, easy) < course_purse(top) < event_purse(top, hard):
+        fails.append('harder conditions must pay more than easier ones')
+    if describe_conditions({}) != 'Standard conditions' or \
+            describe_conditions({'rough': 'Long', 'greens': 'Fast'}) != \
+            'Long rough, fast greens':
+        fails.append('describe_conditions reads wrong: %r'
+                     % describe_conditions({'rough': 'Long', 'greens': 'Fast'}))
+    days = [event_conditions(d) for d in range(46000, 46365)]
+    share = sum(1 for c in days if c['greens'] == 'Medium') / float(len(days))
+    if not 0.4 < share < 0.6:
+        fails.append('a setting should keep its default about half the time, '
+                     'got %.2f' % share)
+    print('conditions: e.g. %s -> $%s'
+          % (describe_conditions(events[0]['conditions']),
+             format(events[0]['purse'], ',')))
+    print('purses: %s $%s ... %s $%s'
+          % (DIFFICULTY_ORDER[0], format(ladder[0], ','),
+             DIFFICULTY_ORDER[-1], format(ladder[-1], ',')))
     print('calendar: %04d-%02d, %d events, first %r at $%s'
           % (year, mon, len(events), events[0]['name'],
              format(events[0]['purse'], ',')))

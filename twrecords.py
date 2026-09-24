@@ -427,7 +427,8 @@ def news(db, now=None, today=None):
         lines = ["TODAY: %s" % event['name'],
                  '%s%s' % (course_name(event['course']),
                            ', purse %s' % _money(event['purse'])
-                           if event['purse'] else '')]
+                           if event['purse'] else ''),
+                 twtourney.describe_conditions(event.get('conditions'))]
         board = [r for r in rs if r['kind'] == 'tourney' and r['day'] == today
                  and r['strokes'] is not None]
         if board:

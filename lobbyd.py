@@ -114,6 +114,9 @@ def rig_config():
 
 ARGS = None
 DB = None
+# The day the --probe-conditions layout counts from: the server's today when it
+# started, so the layout cannot slide under a session that runs past midnight.
+PROBE_ANCHOR = None
 
 # Error codes travel in the frame header's SECOND word -- what we have been
 # calling `ident` -- not in the body.  0x002BB994 copies it straight into the
@@ -345,6 +348,7 @@ def ensure_season():
         note('calendar', 'the tournament calendar was drawn up for %s'
              % ', '.join(made))
     repair_calendar()
+    reprice_calendar()
     return made
 
 
@@ -369,6 +373,41 @@ def repair_calendar():
                twstats.course_name(event['course']),
                twstats.course_name(fixed['course'])))
     return bad
+
+
+def reprice_calendar():
+    """Bring stored events up to the current rules: conditions (tees, rough,
+    fairways, greens) and a purse from the course and those conditions --
+    twtourney.event_conditions and event_purse.
+
+    Months are generated once and kept, so a new rule reaches a calendar that
+    already exists only through here.  From today onward, and never on a day
+    somebody has played (twdb.refresh_events).  An event that already has
+    conditions keeps them; one that has none gets its day's draw -- except
+    TODAY's, which keeps the game's defaults, because it may already be being
+    played on them.  Idempotent: once the calendar agrees, it changes nothing
+    and says nothing."""
+    today = twtourney.today()
+
+    def plan(event):
+        conditions = event['conditions']
+        if not conditions and event['day'] > today:
+            conditions = twtourney.event_conditions(event['day'])
+        return conditions, twtourney.event_purse(event['course'], conditions)
+
+    changed = DB.refresh_events(today, plan)
+    for event, conditions, purse in changed[:5]:
+        log('***', 'updated %s at %s: %s, $%s -> $%s'
+            % (twtourney.from_day(event['day']),
+               twstats.course_name(event['course']),
+               twtourney.describe_conditions(conditions),
+               format(event['purse'], ','), format(purse, ',')))
+    if len(changed) > 5:
+        log('***', '... and %d more upcoming events updated' % (len(changed) - 5))
+    if changed:
+        note('calendar', 'upcoming tournaments now have course conditions, and '
+             'purses to match (%d events updated)' % len(changed))
+    return changed
 
 
 def calendar_tick():
@@ -1420,6 +1459,8 @@ class Handler(socketserver.BaseRequestHandler):
             # the server's clock, never by what a console asks for.
             if ARGS.probe_icons:
                 entries = twtourney.probe_icons(count, start, twstats.COURSES)
+            elif ARGS.probe_conditions:
+                entries = twtourney.probe_conditions(count, start, PROBE_ANCHOR)
             elif ARGS.probe_tourney:
                 entries = twtourney.probe_bytes(count, start)
             else:
@@ -1459,7 +1500,8 @@ class Handler(socketserver.BaseRequestHandler):
         # The server's today, never the console's.  This is the gate on which
         # event can be played at all: the calendar is only a list.
         day = twtourney.today()
-        if DB.event(day) is None and not (ARGS.probe_tourney or ARGS.probe_icons):
+        if DB.event(day) is None and not (ARGS.probe_tourney or ARGS.probe_icons
+                                          or ARGS.probe_conditions):
             log('!!!', '    esr2t: no event generated for %s, refusing'
                 % twtourney.from_day(day))
             return self.send('cusr', ident, {'~~': 'OK', 'CMD': 'esr2t',
@@ -1509,6 +1551,8 @@ class Handler(socketserver.BaseRequestHandler):
         """
         if ARGS.probe_icons:
             return twtourney.probe_icons(1, day, twstats.COURSES)[0]
+        if ARGS.probe_conditions:
+            return twtourney.probe_conditions(1, day, PROBE_ANCHOR)[0]
         if ARGS.probe_tourney:
             return twtourney.probe_bytes(1, day, after=day - 1)[0]
         event = DB.event(day)
@@ -2762,7 +2806,7 @@ class Server(socketserver.ThreadingTCPServer):
         socketserver.ThreadingTCPServer.server_bind(self)
 
 
-def main():
+def main(argv=None):
     global ARGS
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -2811,6 +2855,12 @@ def main():
                     help='give every day of the calendar a different icon '
                          'number, to find out how many there are and what they '
                          'look like.  A mapping aid, not real data.')
+    ap.add_argument('--probe-conditions', action='store_true',
+                    help='answer the tournament calendar with one event '
+                         'condition set per day, each event NAMED for what the '
+                         'UPCOMING EVENT screen should then show (TEES WHITE), '
+                         'to confirm the condition flags.  Today stays a normal '
+                         'event.  A check for a LAN server, not real data.')
     ap.add_argument('--probe-tourney', action='store_true',
                     help='answer the tournament calendar with entries whose 16 '
                          'data bytes hold their own offsets, so a screen names '
@@ -2866,7 +2916,7 @@ def main():
                          'for running under tw04.sh, which would otherwise '
                          'store every line twice')
     ap.add_argument('-v', '--verbose', action='store_true', help='hexdump every frame')
-    ARGS = ap.parse_args()
+    ARGS = ap.parse_args(argv)
 
     global LOG
     LOG = twlog.Log(ARGS.logfile, max_bytes=ARGS.log_max_mb * (1 << 20),
@@ -2899,6 +2949,17 @@ def main():
                    'it opened -- or pass --open.')
     if ARGS.probe_stats:
         log('!!!', 'PROBE MODE -- statistics are field indices, not real values')
+    if ARGS.probe_conditions:
+        global PROBE_ANCHOR
+        PROBE_ANCHOR = twtourney.today()
+        log('!!!', 'PROBE MODE -- tournament event conditions: each day is '
+                   'named for what UPCOMING EVENT should show (from %s):'
+            % twtourney.from_day(PROBE_ANCHOR + 1))
+        day = PROBE_ANCHOR + 1
+        while twtourney.probe_condition_for(day, PROBE_ANCHOR):
+            name, _conds = twtourney.probe_condition_for(day, PROBE_ANCHOR)
+            log('!!!', '    %s  %s' % (twtourney.from_day(day), name))
+            day += 1
     if ARGS.probe_tourney:
         log('!!!', 'PROBE MODE -- tournament data bytes are their own offsets')
     if ARGS.probe_icons:

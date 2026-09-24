@@ -222,7 +222,10 @@ a.pl:hover { color:var(--gold); border-bottom-color:var(--gold); }
 .statgrid .card { margin:0; }
 .statgrid table { font-size:.86rem; }
 .scroll { overflow-x:auto; }
-@media (max-width:560px) { .hide-sm { display:none; } }
+.show-sm { display:none; }
+@media (max-width:560px) { .hide-sm { display:none; } .show-sm { display:block; } }
+.conds { color:var(--mute); font-size:.85rem; }
+.conds b { color:var(--ink); font-weight:600; }
 .chat { list-style:none; margin:.8rem 0 0; padding:0; font-size:.86rem; }
 .chat li { padding:.3rem 0; border-bottom:1px solid var(--line); display:flex;
            gap:.7rem; align-items:baseline; }
@@ -263,6 +266,22 @@ def clink(course):
         return '<span class="foot">unknown course</span>'
     return '<a class="pl" href="/course/%d">%s</a>' % (
         course, html.escape(twrecords.course_name(course)))
+
+
+def conditions_line(conditions):
+    """Every tournament setting on one line -- 'Tees Black · Rough Long ...'
+    -- so nobody has to know what the game's defaults are."""
+    return '<span class="conds">%s</span>' % ' &middot; '.join(
+        '%s <b>%s</b>' % (label, html.escape(option))
+        for label, option, _default in twtourney.condition_items(conditions))
+
+
+def conditions_cells(conditions, cls='hide-sm'):
+    """The same settings as four table cells, Tees / Rough / Fairways /
+    Greens, for the schedule."""
+    return ''.join('<td class="%s">%s</td>' % (cls, html.escape(option))
+                   for _label, option, _default in
+                   twtourney.condition_items(conditions))
 
 
 def _date(t):
@@ -987,11 +1006,12 @@ on the console.</p>
         return ('<div class="card"><h2>Today&rsquo;s event</h2>'
                 '<h1 style="margin:0 0 .2rem">%s</h1>'
                 '<p class="sub" style="margin:0">%s &middot; %s &middot; '
-                '%s</p>%s</div>'
+                '%s</p><p style="margin:.5rem 0 0">%s</p>%s</div>'
                 % (html.escape(event['name']),
                    html.escape(twstats.course_name(event['course'])),
                    twtourney.money(event['purse']),
-                   twtourney.from_day(day).strftime('%A %d %B %Y'), played))
+                   twtourney.from_day(day).strftime('%A %d %B %Y'),
+                   conditions_line(event.get('conditions')), played))
 
     def connect_card(self):
         """How to get the game talking to this server, with the patch to do it.
@@ -1390,13 +1410,20 @@ and none is distributed here.</p>
         for e in DB.events(today, 15):
             course = twstats.course_name(e['course'])
             when = twtourney.from_day(e['day'])
-            rows.append('<tr%s><td>%s</td><td><strong>%s</strong></td>'
-                        '<td>%s</td><td class="num">%s</td></tr>'
+            # All four settings, always: in their own columns on a wide
+            # screen, and as a line under the event's name on a phone.
+            rows.append('<tr%s><td>%s</td><td><strong>%s</strong>'
+                        '<div class="show-sm">%s</div></td>'
+                        '<td>%s</td>%s<td class="num">%s</td></tr>'
                         % (' class="me"' if e['day'] == today else '',
                            when.strftime('%a %d %b'), esc(e['name']),
-                           esc(course), twtourney.money(e['purse'])))
+                           conditions_line(e.get('conditions')),
+                           esc(course), conditions_cells(e.get('conditions')),
+                           twtourney.money(e['purse'])))
         cards.append('<h2>Schedule</h2>' + (
             '<table><thead><tr><th>Date</th><th>Event</th><th>Course</th>'
+            '<th class="hide-sm">Tees</th><th class="hide-sm">Rough</th>'
+            '<th class="hide-sm">Fairways</th><th class="hide-sm">Greens</th>'
             '<th class="num">Purse</th></tr></thead><tbody>'
             + ''.join(rows) + '</tbody></table>' if rows else
             '<p class="foot" style="margin:0">No events scheduled.</p>'))
@@ -1946,7 +1973,7 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
-def main():
+def main(argv=None):
     global DB, BASE, TRUST_PROXY, SECURE_COOKIE, ADVERTISE, LOBBY_PORT
     global REPORTS_KEY, LOG
     ap = argparse.ArgumentParser(description=__doc__,
@@ -1992,7 +2019,7 @@ def main():
                          % twlog.DEFAULT_KEEP)
     ap.add_argument('--quiet', action='store_true',
                     help='log requests to the file only, not the console too')
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     LOG = twlog.Log(args.logfile, max_bytes=args.log_max_mb * (1 << 20),
                     keep=args.log_keep, echo=not args.quiet)
