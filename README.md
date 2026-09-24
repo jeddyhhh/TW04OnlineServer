@@ -31,7 +31,6 @@ server, no build step.
 
 - [What you need](#what-you-need)
 - [Quick start](#quick-start)
-- [Windows: one-window server for a home network](#windows-one-window-server-for-a-home-network)
 - [How it fits together](#how-it-fits-together)
 - [Running it for real](#running-it-for-real)
 - [How players connect](#how-players-connect)
@@ -82,40 +81,6 @@ created the first time either one starts. Each prints the full path it opened.
 **If those two paths ever differ, accounts made on the web site won't exist at
 the game's login screen.**
 
-## Windows: one-window server for a home network
-
-`tw04_local.py` runs the lobby and the web site together in one window, set up
-for playing on a home network with nothing to configure:
-
-```bash
-python tw04_local.py
-```
-
-or build it into a single `.exe` that anyone can double-click:
-
-```bash
-pip install pyinstaller
-python -m PyInstaller --onefile --console --name TW04-LocalServer --hidden-import make_pnach tw04_local.py
-```
-
-The exe appears in `dist\`. When it runs, it:
-
-- finds this PC's address on the network, and makes the web site hand out a
-  patch pointing the game at it;
-- keeps everything in `data\` and `logs\` next to the exe;
-- lets players sign in at the console with any new name and password; the
-  account is created on first sign-in, so the web site is optional
-  (`--closed` turns this off);
-- lets people sign in to the web site over plain `http://` from other PCs;
-- tells you if it's already running, or if a port it needs is taken.
-
-The window shows the web site's address. Players on the network open it,
-download the patch, and follow the connection steps. Close the window to stop
-the server. If Windows asks whether to allow it on the network, allow **private
-networks**, or other PCs can't connect. If the PC has more than one network
-address and the wrong one is picked, add `--ip <address>` to the end of a
-shortcut's Target.
-
 ## How it fits together
 
 ```
@@ -151,7 +116,6 @@ The supporting modules, for anyone reading the code:
 | `make_pnach.py` | builds the game patch |
 | `twlog.py` | the size-capped log both programs write |
 | `tw04.sh` | runs and supervises both on Linux (see below) |
-| `tw04_local.py` | runs both in one window for a home network (see above) |
 
 ## Running it for real
 
