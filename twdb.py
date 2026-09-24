@@ -154,6 +154,20 @@ CREATE TABLE IF NOT EXISTS tourney (
 );
 CREATE INDEX IF NOT EXISTS tourney_day ON tourney(day);
 
+-- EVERY tournament round the server accepted, replays included.  `tourney`
+-- keeps only each player's best of the day, for the leaderboards; this is what
+-- the server's own totals (rounds, holes played, birdies...) count from, so a
+-- replay still shows up as golf that was played.
+CREATE TABLE IF NOT EXISTS tourney_log (
+    id       INTEGER PRIMARY KEY,
+    persona  TEXT NOT NULL,
+    day      INTEGER NOT NULL,
+    course   INTEGER NOT NULL DEFAULT 0,
+    strokes  INTEGER NOT NULL DEFAULT 0,
+    fields   TEXT NOT NULL,
+    received REAL NOT NULL
+);
+
 -- What each course's par is believed to be.  Nothing on the wire ever states
 -- it, so it is learnt from the scorecards themselves -- see
 -- `twtourney.card_par` for why the smallest bound wins and `bound` for how
@@ -382,6 +396,15 @@ class DB:
                 added.add((table, column))
         if ('tourney', 'par') in added:
             self._backfill_par()
+        # A database from before `tourney_log` existed: start the log with
+        # the rounds `tourney` kept, so the totals do not drop to zero.  Every
+        # round since goes into both, so this only ever matches once.
+        if (not self.conn.execute('SELECT 1 FROM tourney_log LIMIT 1').fetchone()
+                and self.conn.execute('SELECT 1 FROM tourney LIMIT 1').fetchone()):
+            self.conn.execute(
+                'INSERT INTO tourney_log (persona, day, course, strokes,'
+                ' fields, received) SELECT persona, day, course, strokes,'
+                ' fields, received FROM tourney ORDER BY received')
 
     def _backfill_par(self):
         """Work out `tourney.par` for rows written before the column existed.
@@ -860,6 +883,11 @@ class DB:
         fewer strokes (Jed, 2026-09-24 -- a 55 then a 58 must leave the 55).
         Returns the strokes that now count for the player on that day."""
         par = twtourney.card_par(fields) or 0
+        now = time.time()
+        self.run('INSERT INTO tourney_log (persona, day, course, strokes,'
+                 ' fields, received) VALUES (?, ?, ?, ?, ?, ?)',
+                 (persona, day, course, fields.get('STROKES', 0),
+                  json.dumps(fields), now))
         self.run('INSERT INTO tourney (persona, day, course, strokes, event,'
                  ' par, fields, received) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
                  ' ON CONFLICT(persona, day) DO UPDATE SET'
@@ -868,7 +896,7 @@ class DB:
                  ' fields=excluded.fields, received=excluded.received'
                  ' WHERE excluded.strokes < tourney.strokes',
                  (persona, day, course, fields.get('STROKES', 0), event, par,
-                  json.dumps(fields), time.time()))
+                  json.dumps(fields), now))
         if par:
             self.note_par(course, par)
         row = self.one('SELECT strokes FROM tourney WHERE persona = ? AND'
@@ -1165,7 +1193,8 @@ class DB:
             'personas': one('SELECT COUNT(*) AS n FROM personas'),
             'golfers': one('SELECT COUNT(*) AS n FROM golfers'),
             'sessions': one('SELECT COUNT(*) AS n FROM sessions'),
-            'rounds': one('SELECT COUNT(*) AS n FROM tourney'),
+            # Every round played, replays too -- see `tourney_log`.
+            'rounds': one('SELECT COUNT(*) AS n FROM tourney_log'),
             'events': one('SELECT COUNT(*) AS n FROM events'),
         }
 
@@ -1199,7 +1228,7 @@ class DB:
         out['longest_putt'] = longest_putt
 
         # Tournament totals, and the best round anywhere.
-        for r in self.query('SELECT strokes, fields FROM tourney'):
+        for r in self.query('SELECT strokes, fields FROM tourney_log'):
             f = json.loads(r['fields'])
             if f.get('HOLES') == 18 and r['strokes']:
                 best_round = (r['strokes'] if not best_round
@@ -1218,7 +1247,7 @@ class DB:
         out['longest_drive'] = longest_drive
         out['longest_putt'] = longest_putt
 
-        row = self.one('SELECT course, COUNT(*) AS n FROM tourney'
+        row = self.one('SELECT course, COUNT(*) AS n FROM tourney_log'
                        ' GROUP BY course ORDER BY n DESC LIMIT 1')
         out['top_course'] = (row['course'], row['n']) if row else None
         row = self.one('SELECT MIN(created) AS n FROM accounts')
