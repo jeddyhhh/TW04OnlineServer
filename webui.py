@@ -225,6 +225,16 @@ a.pl:hover { color:var(--gold); border-bottom-color:var(--gold); }
 .show-sm { display:none; }
 @media (max-width:560px) { .hide-sm { display:none; } .show-sm { display:block; } }
 .conds { color:var(--mute); font-size:.85rem; }
+/* an event's prize money: hidden under its schedule row until the event's
+   name is clicked (a #pay-<day> link), so it needs no script */
+tr.payout { display:none; scroll-margin-top:5rem; }
+tr.payout:target { display:table-row; }
+/* one padding for the outer cell whether hovered or not -- a hover rule that
+   out-ranked the inner cells' padding made the table jump */
+tr.payout > td, tbody tr.payout:hover > td { background:#0f1f15; padding:.8rem 1rem; }
+tr.payout table { max-width:24rem; font-size:.85rem; }
+tr.payout table td { padding:.3rem .4rem; }
+tr.payout caption a { float:right; }
 .conds b { color:var(--ink); font-weight:600; }
 .chat { list-style:none; margin:.8rem 0 0; padding:0; font-size:.86rem; }
 .chat li { padding:.3rem 0; border-bottom:1px solid var(--line); display:flex;
@@ -1417,15 +1427,33 @@ and none is distributed here.</p>
             when = twtourney.from_day(e['day'])
             # All four settings, always: in their own columns on a wide
             # screen, and as a line under the event's name on a phone.
-            rows.append('<tr%s><td>%s</td><td><strong>%s</strong>'
+            rows.append('<tr%s><td>%s</td><td><a class="pl" href="#pay-%d">'
+                        '<strong>%s</strong></a>'
                         '<div class="show-sm">%s</div></td>'
                         '<td>%s</td>%s<td class="num">%s</td></tr>'
                         % (' class="me"' if e['day'] == today else '',
-                           when.strftime('%a %d %b'), esc(e['name']),
+                           when.strftime('%a %d %b'), e['day'], esc(e['name']),
                            conditions_line(e.get('conditions')),
                            esc(course), conditions_cells(e.get('conditions')),
                            twtourney.money(e['purse'])))
-        cards.append('<h2>Schedule</h2>' + (
+            # The Tour-style split of this event's purse, top ten only --
+            # the same `payout` the money list and the console use.
+            rows.append('<tr class="payout" id="pay-%d"><td colspan="8">'
+                        '<table><caption>%s prize money '
+                        '<a href="#schedule">Close</a></caption>'
+                        '<thead><tr><th>Place</th><th class="num">Share</th>'
+                        '<th class="num">Prize</th></tr></thead><tbody>%s'
+                        '</tbody></table></td></tr>'
+                        % (e['day'], esc(e['name']), ''.join(
+                            '<tr><td>%s</td><td class="num">%s%%</td>'
+                            '<td class="num">%s</td></tr>'
+                            % (_ordinal(n), ('%.2f' % (share * 100))
+                               .rstrip('0').rstrip('.'),
+                               twtourney.money(twtourney.payout(e['purse'], n)))
+                            for n, share in enumerate(twtourney.PAYOUT, 1))))
+        cards.append('<h2 id="schedule">Schedule</h2>' + (
+            '<p class="foot" style="margin:-.4rem 0 .8rem">Click an event to '
+            'see how its purse is paid out.</p>' if rows else '') + (
             '<table><thead><tr><th>Date</th><th>Event</th><th>Course</th>'
             '<th class="hide-sm">Tees</th><th class="hide-sm">Rough</th>'
             '<th class="hide-sm">Fairways</th><th class="hide-sm">Greens</th>'
