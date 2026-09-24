@@ -34,7 +34,11 @@ import twtourney
 
 MIN_ROUNDS = 3              # before an average goes on a leaderboard
 WEEK = 7 * 24 * 3600
-NEWS_WIDTH = 60             # the news screen wraps at 64 (0x00272ED0)
+# The news screen's code wraps at 64 (0x00272ED0), but its BOX is narrower:
+# on a real console (2026-09-25) a 49-character line ran right to the edge,
+# and anything past about 45 went off the side.  The font is proportional, so
+# 40 leaves room for lines heavy in wide capitals.
+NEWS_WIDTH = 40
 NEWS_RECORDS = ('low', 'drive', 'putt')     # which records make the news
 NEWS_MAX_RECORDS = 6
 
@@ -577,6 +581,15 @@ def news(db, now=None, today=None):
                                      subsequent_indent='  ') or [''])
         out.append('')
     return '\n'.join(out).rstrip('\n')
+
+
+def wrap_news(text):
+    """The operator's news text, every line wrapped to fit the screen.
+    Blank lines are kept, so paragraphs stay apart."""
+    out = []
+    for line in text.replace('\r\n', '\n').replace('\r', '\n').split('\n'):
+        out.extend(textwrap.wrap(line, NEWS_WIDTH) or [''])
+    return '\n'.join(out)
 
 
 # ---------------------------------------------------------------------------

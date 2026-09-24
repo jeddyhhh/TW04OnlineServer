@@ -2225,12 +2225,14 @@ and none is distributed here.</p>
                 '<form method="post" action="%s/news"><textarea name="news" '
                 'maxlength="%d" spellcheck="true">%s</textarea>'
                 '<p class="foot" style="margin:.5rem 0 0">Plain ASCII, up to %d '
-                'characters; the NEWS screen wraps at 64. The server&rsquo;s '
+                'characters. The NEWS screen fits about %d characters a line; '
+                'longer lines are wrapped for you. The server&rsquo;s '
                 'automatic digest of recent results follows it. Saved to '
                 '<code>%s</code>.</p><button type="submit">Save news</button>'
                 '</form></div>'
                 % (base, esc(query), twdb.MIN_PASSWORD, twdb.MAX_PASSWORD,
                    results, base, NEWS_LIMIT, html.escape(text), NEWS_LIMIT,
+                   twrecords.NEWS_WIDTH,
                    esc(NEWS_FILE)))
         return page('Admin', body, message=note, kind=kind, stats=False)
 
