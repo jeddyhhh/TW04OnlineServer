@@ -28,6 +28,8 @@ with `cusr whomi` and the opponent fetches with `user`.  That is what makes your
 player follow you between consoles, so it belongs here rather than in memory.
 """
 import argparse
+import collections
+import datetime
 import hashlib
 import hmac
 import json
@@ -271,6 +273,14 @@ CREATE TABLE IF NOT EXISTS live (
     at    REAL NOT NULL
 );
 
+-- The most players online at once, per server day (twtourney's day number).
+-- `live.peak_online` is the all-time figure; this is its history, for the
+-- stats page's activity chart.
+CREATE TABLE IF NOT EXISTS daily_peak (
+    day  INTEGER PRIMARY KEY,
+    peak INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS results_auth ON results(auth);
 CREATE INDEX IF NOT EXISTS results_reporter ON results(reporter);
 """
@@ -357,6 +367,7 @@ class DB:
         self.lock = threading.Lock()
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        self._match_cache = (None, [])
         with self.lock:
             self.conn.executescript(SCHEMA)
             self._migrate()
@@ -709,7 +720,25 @@ class DB:
             (persona, limit))
 
     def matches(self, persona=None, limit=200):
-        """One row per match, resolved against the session that brokered it.
+        """One row per match, newest first; `limit=None` for all of them.
+
+        Built from `all_matches`, so a persona's matches are found among EVERY
+        match -- the old SQL LIMIT ran before the persona filter, so a player's
+        record only ever saw the last few hundred matches on the server.
+        """
+        out = [m for m in self.all_matches()
+               if not persona or persona in (m['host'], m['guest'])]
+        return out if limit is None else out[:limit]
+
+    def all_matches(self):
+        """Every match, newest first, resolved against the session that
+        brokered it.
+
+        Cached, because the Server Stats board totals every match on every page
+        load.  The key is the newest result and the sessions table's newest
+        rowid and size: results are only ever inserted, and a session is only
+        ever written by INSERT OR REPLACE, which gives it a new rowid -- so any
+        change that could alter the answer changes the key.
 
         Both consoles report the same match, so the raw `results` table holds it
         twice.  Deduplicating on AUTH is only possible because the token is
@@ -728,18 +757,23 @@ class DB:
         # would do -- but nothing stops a console sending a third, later, with
         # better numbers.  Taking the newest row let a player who had lost
         # resubmit and flip the result; taking the earliest does not.
+        k = self.one('SELECT (SELECT MAX(id) FROM results) AS r,'
+                     ' (SELECT MAX(rowid) FROM sessions) AS s,'
+                     ' (SELECT COUNT(*) FROM sessions) AS n')
+        key = (k['r'], k['s'], k['n']) if k else None
+        cached_key, cached = self._match_cache
+        if key is not None and key == cached_key:
+            return cached
         seen, out = set(), []
         for row in self.query(
                 'SELECT * FROM results WHERE id IN'
                 ' (SELECT MIN(id) FROM results GROUP BY auth)'
-                ' ORDER BY id DESC LIMIT ?', (limit * 2,)):
+                ' ORDER BY id DESC'):
             if row['auth'] in seen:
                 continue
             ses = self.session(row['auth'])
             if not ses:
                 continue          # a result for a match we did not broker
-            if persona and persona not in (ses['host'], ses['guest']):
-                continue
             seen.add(row['auth'])
             f = json.loads(row['fields'])
             raw_setup = _col(ses, 'setup', '')
@@ -777,14 +811,13 @@ class DB:
                 })
             match['winner'] = _winner(match['players'])
             out.append(match)
-            if len(out) >= limit:
-                break
+        self._match_cache = (key, out)
         return out
 
     def record(self, persona):
         """(played, won, lost, tied) over the matches this persona finished."""
         played = won = lost = tied = 0
-        for m in self.matches(persona):
+        for m in self.matches(persona, limit=None):
             mine = next(p for p in m['players'] if p['name'] == persona)
             if not mine['done'] or mine['quit']:
                 continue
@@ -975,17 +1008,25 @@ class DB:
         One board must be scored against one par or the to-par column comes
         out in a different order from the strokes it was sorted by.
         """
-        rows = self.query('SELECT * FROM tourney WHERE day = ?'
-                          ' ORDER BY strokes ASC, received ASC LIMIT ?',
-                          (day, limit))
+        rows = self.query(
+            'SELECT t.*,'
+            ' (SELECT COUNT(*) FROM tourney b WHERE b.day = t.day'
+            '  AND b.strokes < t.strokes) + 1 AS place,'
+            ' (SELECT COUNT(*) FROM tourney b WHERE b.day = t.day'
+            '  AND b.strokes = t.strokes) AS tied'
+            ' FROM tourney t WHERE t.day = ?'
+            ' ORDER BY t.strokes ASC, t.received ASC LIMIT ?', (day, limit))
         pars = self.course_pars() if rows else {}
+        # `place` is shared on a tie -- two 62s are both 1st and the next
+        # score is 3rd -- and `tied` is how many share it (1 when nobody does).
         return [{'name': r['persona'], 'strokes': r['strokes'],
                  'course': r['course'], 'event': _col(r, 'event', ''),
                  'par': pars.get(r['course'], twtourney.DEFAULT_PAR),
-                 'fields': json.loads(r['fields'])}
+                 'fields': json.loads(r['fields']),
+                 'place': r['place'], 'tied': r['tied']}
                 for r in rows]
 
-    def tourney_standings(self, first, last, payout=None):
+    def tourney_standings(self, first, last, payout=None, open_day=None):
         """Every player over a range of event days, richest first.
 
         `payout(purse, place)` is passed in rather than imported so the money
@@ -995,7 +1036,16 @@ class DB:
         A placing only means something inside its own event and each event has
         its own purse, so this has to walk a day at a time; there is no way to
         total it with one query.
+
+        Players tied on a day share the prizes for the places they cover, as
+        the Tour does: two tied for 1st each get (1st + 2nd) / 2.
+
+        `open_day` (default: today) and after are still being played, so they
+        count towards rounds and earnings -- a live standing -- but not towards
+        `wins` or `best`, which only a finished event can give.
         """
+        if open_day is None:
+            open_day = twtourney.today()
         table = {}
         for day in range(first, last + 1):
             board = self.tourney_day(day, limit=1000)
@@ -1003,28 +1053,42 @@ class DB:
                 continue
             event = self.event(day)
             purse = event['purse'] if event else 0
-            for place, row in enumerate(board, 1):
+            for row in board:
+                place, tied = row['place'], row['tied']
                 e = table.setdefault(row['name'], {
                     'name': row['name'], 'rounds': 0, 'earned': 0,
                     'wins': 0, 'best': None, 'strokes': 0})
                 e['rounds'] += 1
                 e['strokes'] += row['strokes']
-                e['wins'] += (place == 1)
-                e['best'] = place if e['best'] is None else min(e['best'], place)
+                if day < open_day:
+                    e['wins'] += (place == 1)
+                    e['best'] = (place if e['best'] is None
+                                 else min(e['best'], place))
                 if payout:
-                    e['earned'] += payout(purse, place)
+                    e['earned'] += sum(payout(purse, p) for p in
+                                       range(place, place + tied)) // tied
         return sorted(table.values(), key=lambda r: (-r['earned'], r['strokes']))
 
-    def tourney_recent(self, limit=20):
-        """The most recent finished events, newest first, with their winner."""
+    def tourney_recent(self, limit=20, open_day=None):
+        """The most recent FINISHED events, newest first, with their winner.
+
+        Today's event is still being played, so it has no winner yet.  A tie
+        for 1st has more than one: `winners` holds them all, and `winner` is
+        the first of them.
+        """
+        if open_day is None:
+            open_day = twtourney.today()
         rows = self.query('SELECT day, MIN(strokes) AS best FROM tourney'
-                          ' GROUP BY day ORDER BY day DESC LIMIT ?', (limit,))
+                          ' WHERE day < ? GROUP BY day ORDER BY day DESC'
+                          ' LIMIT ?', (open_day, limit))
         out = []
         for r in rows:
-            board = self.tourney_day(r['day'], limit=1)
+            board = [b for b in self.tourney_day(r['day'], limit=1000)
+                     if b['place'] == 1]
             event = self.event(r['day'])
             if board:
-                out.append({'day': r['day'], 'event': event, 'winner': board[0]})
+                out.append({'day': r['day'], 'event': event,
+                            'winner': board[0], 'winners': board})
         return out
 
     # -- the live picture ---------------------------------------------------
@@ -1111,6 +1175,80 @@ class DB:
         """Start of day.  A server that crashed left its players "online"."""
         self.run('DELETE FROM presence')
         self.run('DELETE FROM playing')
+
+    def note_online(self, count, day=None):
+        """Fold how many are online now into today's peak."""
+        day = twtourney.today() if day is None else day
+        self.run('INSERT INTO daily_peak (day, peak) VALUES (?, ?)'
+                 ' ON CONFLICT(day) DO UPDATE SET peak = MAX(peak, excluded.peak)',
+                 (day, int(count)))
+
+    def activity_days(self, days=30, today=None):
+        """[(day, tournament rounds, matches, peak online), ...] for the last
+        `days` server days, oldest first.  Rounds are every round played,
+        replays included (`tourney_log`); matches are by when the result
+        arrived; peak is None for a day before peaks were recorded."""
+        today = twtourney.today() if today is None else today
+        first = today - days + 1
+        rounds = collections.Counter(
+            r['day'] for r in self.query(
+                'SELECT day FROM tourney_log WHERE day >= ?', (first,)))
+        matches = collections.Counter(
+            twtourney.to_day(datetime.date.fromtimestamp(m['received']))
+            for m in self.all_matches() if m['received'])
+        peaks = {r['day']: r['peak'] for r in self.query(
+            'SELECT day, peak FROM daily_peak WHERE day >= ?', (first,))}
+        return [(d, rounds.get(d, 0), matches.get(d, 0), peaks.get(d))
+                for d in range(first, today + 1)]
+
+    # -- the operator's admin page ----------------------------------------
+    def find_accounts(self, text, limit=20):
+        """Accounts whose name, or one of whose personas, contains `text`."""
+        like = '%' + text.strip().replace('%', '').replace('_', '') + '%'
+        rows = self.query(
+            'SELECT DISTINCT a.* FROM accounts a'
+            ' LEFT JOIN personas p ON p.account_id = a.id'
+            ' WHERE a.name LIKE ? OR p.name LIKE ? ORDER BY a.name LIMIT ?',
+            (like, like, limit))
+        return [dict(r, personas=self.personas(r['id'])) for r in rows]
+
+    def set_disabled(self, account_id, disabled):
+        self.run('UPDATE accounts SET disabled = ? WHERE id = ?',
+                 (int(bool(disabled)), account_id))
+
+    # Every column that holds a persona by NAME rather than by id.  A rename
+    # has to reach all of them, or the renamed player's history -- results,
+    # tournament rounds, reports -- would stay behind under the old name.
+    PERSONA_COLUMNS = (
+        ('personas', 'name'), ('sessions', 'host'), ('sessions', 'guest'),
+        ('results', 'reporter'), ('tourney', 'persona'),
+        ('tourney_log', 'persona'), ('presence', 'persona'),
+        ('playing', 'host'), ('playing', 'guest'), ('activity', 'who'),
+        ('lkeys', 'persona'), ('reports', 'reporter'), ('reports', 'accused'),
+    )
+
+    def rename_persona(self, old, new):
+        """Rename a persona everywhere it is stored.  Returns the new name."""
+        row = self.persona(old)
+        if not row:
+            raise Error('there is no persona called %r' % old)
+        new = check_name(new, 'persona')
+        clash = self.persona(new)
+        if clash and clash['id'] != row['id']:
+            raise Error('the persona %r is already taken' % new)
+        old = row['name']
+        with self.lock:
+            try:
+                for table, column in self.PERSONA_COLUMNS:
+                    self.conn.execute(
+                        'UPDATE %s SET %s = ? WHERE %s = ? COLLATE NOCASE'
+                        % (table, column, column), (new, old))
+                self.conn.commit()
+            except sqlite3.Error:
+                self.conn.rollback()
+                raise
+        self._match_cache = (None, [])
+        return new
 
     def online(self, stale=None):
         """Everyone present, longest-standing first, ghosts dropped."""
@@ -1211,7 +1349,7 @@ class DB:
         totals = dict.fromkeys(('matches', 'holes', 'strokes', 'birdies',
                                 'eagles', 'aces'), 0)
         best_round = longest_drive = longest_putt = 0
-        for m in self.matches(limit=500):
+        for m in self.all_matches():
             totals['matches'] += 1
             for pl in m['players']:
                 if not pl['done'] or pl['quit']:
@@ -1272,9 +1410,9 @@ class DB:
     def tourney_place(self, persona, day):
         """(place, entrants) for a persona on a day, or (0, n) if absent."""
         board = self.tourney_day(day, limit=1000)
-        for n, row in enumerate(board, 1):
+        for row in board:
             if row['name'] == persona:
-                return n, len(board)
+                return row['place'], len(board)
         return 0, len(board)
 
     def leaderboard(self, limit=50, kind=None, since=None):
@@ -1290,7 +1428,7 @@ class DB:
         time is the server's own.
         """
         table = {}
-        for m in self.matches(limit=500):
+        for m in self.all_matches():
             if kind and not (m['room'] or '').startswith(kind):
                 continue
             if since is not None and (m['received'] or 0) < since:

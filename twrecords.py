@@ -155,8 +155,9 @@ def rounds(db):
                     if full else None)
         r['to_par'] = r['strokes'] - r['par'] if full else None
 
-    # A tournament round's finishing place in its day's field, ordered as the
-    # tournament board orders it: strokes, then whoever reported first.
+    # A tournament round's finishing place in its day's field, as the
+    # tournament board gives it: 1 + everyone who scored better, so a tie
+    # shares a place.
     days = collections.defaultdict(list)
     for r in done:
         r['place'] = r['field'] = None
@@ -164,8 +165,9 @@ def rounds(db):
             days[r['day']].append(r)
     for field in days.values():
         field.sort(key=lambda r: (r['strokes'], r['when']))
-        for n, r in enumerate(field, 1):
-            r['place'], r['field'] = n, len(field)
+        for r in field:
+            r['place'] = 1 + sum(o['strokes'] < r['strokes'] for o in field)
+            r['field'] = len(field)
 
     done.sort(key=lambda r: r['when'])
     return done
@@ -225,17 +227,24 @@ def _agg(rs):
     }
 
 
-def tourney_wins(rs):
-    """{persona: [winning round, ...]}.  A day's winner is its lowest round;
-    a tie goes to whoever reported first, as on the tournament board."""
+def tourney_wins(rs, open_day=None):
+    """{persona: [winning round, ...]}.  A day's winners are everyone on its
+    lowest score -- a tie for 1st is a win for each, as on the tournament
+    board -- and only finished days count: `open_day` (default today) is
+    still being played."""
+    if open_day is None:
+        open_day = twtourney.today()
     days = collections.defaultdict(list)
     for r in rs:
-        if r['kind'] == 'tourney' and r['strokes'] is not None:
+        if (r['kind'] == 'tourney' and r['strokes'] is not None
+                and r['day'] is not None and r['day'] < open_day):
             days[r['day']].append(r)
     wins = collections.defaultdict(list)
     for day, field in days.items():
-        best = min(field, key=lambda r: (r['strokes'], r['when']))
-        wins[best['persona']].append(best)
+        low = min(r['strokes'] for r in field)
+        for r in field:
+            if r['strokes'] == low:
+                wins[r['persona']].append(r)
     return wins
 
 
@@ -272,6 +281,85 @@ def player(rs, name):
         'first': mine[0]['when'], 'latest': mine[-1]['when'],
     })
     return a
+
+
+def head_to_head(rs, a, b):
+    """Every finished match between `a` and `b`, from `a`'s side, or None if
+    they have never met.  Match play's ties are halves.
+
+    {'a', 'b' (as stored), 'W', 'L', 'T', 'kinds': {kind: [W, L, T]},
+     'meetings': [{'when', 'kind', 'course', 'result', 'mine', 'theirs'}, ...]}
+    newest first, where `mine`/`theirs` are the two players' rounds.
+    """
+    mine = [r for r in rs if r['result'] is not None
+            and r['persona'].lower() == a.lower()
+            and r['opponent'].lower() == b.lower()]
+    if not mine:
+        return None
+    theirs = {r['auth']: r for r in rs if r['result'] is not None
+              and r['persona'].lower() == b.lower()}
+    out = {'a': mine[0]['persona'], 'b': mine[0]['opponent'],
+           'W': 0, 'L': 0, 'T': 0, 'kinds': {}, 'meetings': []}
+    for r in mine:
+        out[r['result']] += 1
+        tally = out['kinds'].setdefault(r['kind'], {'W': 0, 'L': 0, 'T': 0})
+        tally[r['result']] += 1
+        out['meetings'].append({'when': r['when'], 'kind': r['kind'],
+                                'course': r['course'], 'result': r['result'],
+                                'mine': r, 'theirs': theirs.get(r['auth'])})
+    out['meetings'].sort(key=lambda m: -m['when'])
+    return out
+
+
+# The achievements a player page shows, in order: key, title, what it takes.
+ACHIEVEMENTS = (
+    ('eagle', 'First eagle', 'Make an eagle in any round.'),
+    ('ace', 'Hole in one', 'Hole a tee shot.'),
+    ('sub60', 'Under 60', 'Finish an 18-hole round in 59 or fewer.'),
+    ('wins5', 'Five-time winner', 'Win 5 Online Tournament events.'),
+    ('every', 'Grand tour', 'Win on every course: a match, or a tournament '
+                            'event held there.'),
+)
+
+
+def achievements(rs, name, open_day=None):
+    """[{'key', 'title', 'how', 'when' (epoch it was earned, or None),
+    'progress' ('3 of 5', or '')}, ...] for one player, in ACHIEVEMENTS
+    order.  Only finished rounds count, as everywhere else on the site; a
+    tournament win only counts once its day is over."""
+    mine = sorted((r for r in rs if r['persona'].lower() == name.lower()),
+                  key=lambda r: r['when'])
+    wins = sorted(tourney_wins(rs, open_day).get(
+        mine[0]['persona'] if mine else name, []), key=lambda r: r['when'])
+
+    def first(test):
+        return next((r['when'] for r in mine if test(r)), None)
+
+    got = {
+        'eagle': first(lambda r: (r['eagles'] or 0) > 0),
+        'ace': first(lambda r: (r['aces'] or 0) > 0),
+        'sub60': first(lambda r: r['holes'] == 18
+                       and r['strokes'] is not None and r['strokes'] < 60),
+        'wins5': wins[4]['when'] if len(wins) >= 5 else None,
+    }
+    progress = {'wins5': '%d of 5' % min(len(wins), 5) if len(wins) < 5 else ''}
+
+    # A course is won by a head-to-head win there or a tournament win there;
+    # the achievement is dated by the win that completed the set.
+    everywhere = set(twtourney.TOURNEY_COURSES)
+    won_at, done = {}, None
+    for r in sorted([r for r in mine if r['result'] == 'W'] + wins,
+                    key=lambda r: r['when']):
+        if r['course'] in everywhere and r['course'] not in won_at:
+            won_at[r['course']] = r['when']
+            if len(won_at) == len(everywhere):
+                done = r['when']
+    got['every'] = done
+    progress['every'] = ('' if done else '%d of %d courses'
+                         % (len(won_at), len(everywhere)))
+    return [{'key': k, 'title': t, 'how': h, 'when': got[k],
+             'progress': progress.get(k, '') if not got[k] else ''}
+            for k, t, h in ACHIEVEMENTS]
 
 
 # name, heading, the aggregate key, 'low' or 'high' is better, format, minimum

@@ -705,6 +705,7 @@ def publish_live():
             PEAK_ONLINE[0] = len(shown)
             DB.set_live('peak_online', PEAK_ONLINE[0])
         DB.set_live('online', len(shown))
+        DB.note_online(len(shown))          # today's peak, for the stats chart
         DB.set_live('heartbeat', int(time.time()))
     except Exception as exc:                            # noqa: BLE001
         log('!!!', '    could not publish the live picture: %s' % exc)
@@ -1530,16 +1531,15 @@ class Handler(socketserver.BaseRequestHandler):
         me = self.persona or ''
         out = []
         for day in range(start, start + count):
-            board = DB.tourney_day(day)
-            place = next((n for n, row in enumerate(board, 1)
-                          if row['name'] == me), 0)
-            if not place:
+            board = DB.tourney_day(day, limit=1000)
+            mine = next((row for row in board if row['name'] == me), None)
+            if not mine:
                 continue
             out.append(twtourney.make_result(
                 board[0]['name'], day,
                 winner_score=board[0]['strokes'],
-                your_score=board[place - 1]['strokes'],
-                place=place))
+                your_score=mine['strokes'],
+                place=mine['place']))
         return out
 
     def tourney_entry(self, day):
@@ -1897,16 +1897,18 @@ class Handler(socketserver.BaseRequestHandler):
         return out
 
     def event_winners(self):
-        """Whoever won each event, newest first."""
+        """Whoever won each FINISHED event, newest first -- today's is still
+        being played.  Players tied for 1st are all winners, one row each."""
         out = []
         for day in range(twtourney.today() - self.SEASON_DAYS,
-                         twtourney.today() + 1):
-            board = DB.tourney_day(day, limit=1)
-            if board:
-                out.append({'name': board[0]['name'], 'day': day,
-                            'strokes': board[0]['strokes'],
-                            'text': twtourney.to_par(board[0]['fields'],
-                                                     board[0]['par'])})
+                         twtourney.today()):
+            for row in DB.tourney_day(day, limit=1000):
+                if row['place'] != 1:
+                    break
+                out.append({'name': row['name'], 'day': day,
+                            'strokes': row['strokes'],
+                            'text': twtourney.to_par(row['fields'],
+                                                     row['par'])})
         out.reverse()
         return out
 
@@ -1957,8 +1959,9 @@ class Handler(socketserver.BaseRequestHandler):
                 # in stroke play the lowest round wins, but the client puts the
                 # largest `P` on top.  Not drawn anywhere -- purely the order.
                 row['p'] = max(0, twtourney.SORT_BASE - row['strokes'])
+            # Tied scores share a rank, as on the web site.
             return ('daily, %s' % twtourney.from_day(day),
-                    list(enumerate(rows, 1)))
+                    [(row['place'], row) for row in rows])
 
         if self.WEEKLY_BASE <= index <= self.WEEKLY_BASE + span // 7:
             monday = first + (index - self.WEEKLY_BASE) * 7

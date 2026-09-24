@@ -12,6 +12,7 @@ name and password go in at `auth`, and the personas this page manages are the
 list the game offers on the SELECT ACCOUNT screen.
 """
 import argparse
+import datetime
 import html
 import http.cookies
 import http.server
@@ -69,6 +70,15 @@ LOBBY_PORT = 10200
 # ordinary 404, so its existence is not advertised.  The key is made once and
 # kept beside the database (see `reports_key`).  Empty switches the page off.
 REPORTS_KEY = ''
+
+# The operator's admin page -- password resets, renames, bans and the in-game
+# news -- at /admin/<ADMIN_KEY>, kept exactly like the reports page: made once
+# beside the database, never linked.  Empty switches it off.
+ADMIN_KEY = ''
+# The in-game news file lobbyd reads (its --news).  Both default to news.txt
+# beside the database.
+NEWS_FILE = ''
+NEWS_LIMIT = 4000             # lobbyd's buffer is 4999, and the digest follows
 _ENDPOINT = [0.0, None]       # (when it was resolved, (ip, port)) -- see below
 ENDPOINT_TTL = 300
 
@@ -236,6 +246,46 @@ tr.payout table { max-width:24rem; font-size:.85rem; }
 tr.payout table td { padding:.3rem .4rem; }
 tr.payout caption a { float:right; }
 .conds b { color:var(--ink); font-weight:600; }
+/* achievements on a player page: earned ones lit, the rest dimmed */
+.ach { display:grid; gap:.8rem; grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr)); }
+.ach div { background:#0f2115; border:1px solid var(--line); border-radius:10px;
+           padding:.8rem .9rem; }
+.ach b { display:block; font-size:.95rem; }
+.ach span { display:block; font-size:.78rem; color:var(--mute); margin-top:.2rem; }
+.ach .got { border-color:#6b5a1c; }
+.ach .got b { color:var(--gold); }
+.ach .no { opacity:.55; }
+
+/* the activity chart: one column per day, bars scaled to the busiest day */
+.chart { display:flex; align-items:flex-end; gap:2px; height:130px;
+         border-bottom:1px solid var(--line-2); }
+.chart div { flex:1 1 0; display:flex; flex-direction:column-reverse;
+             height:100%; min-width:0; }
+.chart i { display:block; width:100%; }
+.chart .r { background:var(--gold); }
+.chart .m { background:#4f9a66; }
+.chart .p { background:#8fd0a3; }
+.chart .today i { opacity:.7; }
+.axis { display:flex; justify-content:space-between; font-size:.72rem;
+        color:#5f7566; margin-top:.3rem; }
+.key { font-size:.78rem; color:var(--mute); margin:0 0 .6rem; }
+.key i { display:inline-block; width:.7rem; height:.7rem; border-radius:2px;
+         margin:0 .3rem 0 .8rem; vertical-align:-1px; }
+.key i:first-child { margin-left:0; }
+
+/* the admin page */
+textarea { width:100%; min-height:14rem; padding:.6rem .75rem; border-radius:8px;
+           border:1px solid var(--line-2); background:#0a1710; color:var(--ink);
+           font:.9rem/1.5 ui-monospace,Consolas,monospace; }
+.admin-acct { border-top:1px solid var(--line); padding:1rem 0 .4rem; }
+.admin-acct:first-of-type { border-top:0; padding-top:0; }
+.admin-acct form { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;
+                   margin:.5rem 0 0; }
+.admin-acct form input[type=text] { width:auto; flex:1 1 9rem; max-width:16rem;
+                                    padding:.35rem .6rem; font-size:.9rem; }
+.admin-acct form button { margin:0; padding:.4rem .9rem; font-size:.72rem; }
+.admin-acct form .lbl { font-size:.8rem; color:var(--mute); min-width:8rem; }
+
 .chat { list-style:none; margin:.8rem 0 0; padding:0; font-size:.86rem; }
 .chat li { padding:.3rem 0; border-bottom:1px solid var(--line); display:flex;
            gap:.7rem; align-items:baseline; }
@@ -298,10 +348,53 @@ def _date(t):
     return time.strftime('%d %b %Y', time.localtime(t)) if t else ''
 
 
+def new_password():
+    """Eight letters and digits, none that look alike -- something a player
+    can read off a screen and type on the console's keyboard."""
+    alphabet = 'abcdefghjkmnpqrstuvwxyz23456789'
+    n = max(twdb.MIN_PASSWORD, min(8, twdb.MAX_PASSWORD))
+    return ''.join(secrets.choice(alphabet) for _ in range(n))
+
+
+def event_href(day):
+    """/event/2026-09-24 -- an event's page, by its date."""
+    return '/event/%s' % twtourney.from_day(day).isoformat()
+
+
+def h2h_href(a, b):
+    return '/h2h/%s/%s' % (urllib.parse.quote(a, safe=''),
+                           urllib.parse.quote(b, safe=''))
+
+
+def closes_in(now=None):
+    """'6h 12m' until the server's midnight, when today's event closes."""
+    now = now or datetime.datetime.now()
+    midnight = datetime.datetime.combine(now.date() + datetime.timedelta(days=1),
+                                         datetime.time.min)
+    mins = max(1, int((midnight - now).total_seconds() // 60))
+    return '%dh %02dm' % divmod(mins, 60) if mins >= 60 else '%dm' % mins
+
+
+def prize(purse, place, tied=1):
+    """What one player on `place` earns, sharing with `tied` others as
+    twdb.tourney_standings does."""
+    tied = max(1, tied or 1)
+    return sum(twtourney.payout(purse, p)
+               for p in range(place, place + tied)) // tied
+
+
+def _place(r):
+    """'1', or 'T1' when the place is shared."""
+    return ('T%d' if r.get('tied', 1) > 1 else '%d') % r['place']
+
+
 def _kind(r):
-    """What sort of round this was, for a table cell."""
+    """What sort of round this was, for a table cell.  A tournament round
+    links to its event's page."""
     if r['kind'] == 'tourney':
-        return html.escape(r['event'] or 'Tournament')
+        name = html.escape(r['event'] or 'Tournament')
+        return ('<a class="pl" href="%s">%s</a>' % (event_href(r['day']), name)
+                if r.get('day') is not None else name)
     return 'Match play' if r['kind'] == 'match' else 'Stroke play'
 
 
@@ -573,17 +666,17 @@ PRIVATE = (('Cache-Control', 'no-store'),
            ('Referrer-Policy', 'no-referrer'))
 
 
-def reports_key(db_path, given=''):
-    """The secret in the reports page's address.
+def reports_key(db_path, given='', name='reports.key'):
+    """The secret in the reports (or admin) page's address.
 
     `--reports-key` wins; otherwise it is read from `reports.key` beside the
     database, and made there the first time.  Beside the database rather than
     beside this file, so a deployment copied over the top of an old one keeps
-    the same address.
+    the same address.  The admin page's is `admin.key`, made the same way.
     """
     if given:
         return given
-    path = os.path.join(os.path.dirname(os.path.abspath(db_path)), 'reports.key')
+    path = os.path.join(os.path.dirname(os.path.abspath(db_path)), name)
     try:
         with open(path, encoding='ascii') as f:
             key = f.read().strip()
@@ -800,6 +893,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 urllib.parse.unquote(path[len('/player/'):]), session)
         if path == '/tournaments':
             return self.reply(self.tournaments(session))
+        if path.startswith('/event/'):
+            return self.event_page(path[len('/event/'):], session)
+        if path.startswith('/h2h/'):
+            names = path[len('/h2h/'):].split('/')
+            if len(names) != 2:
+                return self.not_found('Head to head', 'That is not a pair of '
+                                      'golfers.', session)
+            return self.h2h_page(*[urllib.parse.unquote(n) for n in names],
+                                 session=session)
+        if path.startswith('/admin/'):
+            if not self.admin_allowed(path[len('/admin/'):]):
+                return self.reply(page('Not found', '<h1>Not found</h1>'),
+                                  status=404)
+            return self.reply(self.admin_page(
+                (query.get('q') or [''])[0], note), headers=PRIVATE)
         if path.startswith('/reports/'):
             if not self.reports_allowed(path[len('/reports/'):]):
                 return self.reply(page('Not found', '<h1>Not found</h1>'),
@@ -827,6 +935,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.reply(page('Not found', '<h1>Not found</h1>'),
                                   status=404)
             return self.do_report_handled(key, fields)
+
+        if path.startswith('/admin/'):
+            # As with the reports page, the key in the path is the credential
+            # and the CSRF token at once.
+            key, _, action = path[len('/admin/'):].partition('/')
+            if not self.admin_allowed(key):
+                return self.reply(page('Not found', '<h1>Not found</h1>'),
+                                  status=404)
+            return self.do_admin(action, fields)
 
         if path in ('/register', '/login'):
             if throttled(self.peer()):
@@ -1002,22 +1119,26 @@ on the console.</p>
             rows = ''.join(
                 '<tr><td class="rank%s">%d</td><td>%s</td>'
                 '<td class="num">%d</td><td class="num %s">%s</td></tr>'
-                % (' rank-1' if n == 1 else '', n, plink(r['name']),
-                   r['strokes'],
+                % (' rank-1' if r['place'] == 1 else '', r['place'],
+                   plink(r['name']), r['strokes'],
                    'under' if twtourney.to_par(
                        r['fields'], r['par']).startswith('-') else 'over',
                    twtourney.to_par(r['fields'], r['par']))
-                for n, r in enumerate(board, 1))
+                for r in board)
             played = ('<table style="margin-top:1rem"><caption>Leading today'
                       '</caption><tbody>%s</tbody></table>' % rows)
         else:
             played = ('<p class="foot" style="margin-top:1rem">Nobody has '
                       'posted a score yet today.</p>')
-        return ('<div class="card"><h2>Today&rsquo;s event</h2>'
+        if board:
+            played += ('<p class="foot" style="margin:.6rem 0 0"><a class="pl" '
+                       'href="%s">Full leaderboard</a></p>' % event_href(day))
+        return ('<div class="card"><h2>Today&rsquo;s event &middot; '
+                '<span style="color:var(--ink)">closes in %s</span></h2>'
                 '<h1 style="margin:0 0 .2rem">%s</h1>'
                 '<p class="sub" style="margin:0">%s &middot; %s &middot; '
                 '%s</p><p style="margin:.5rem 0 0">%s</p>%s</div>'
-                % (html.escape(event['name']),
+                % (closes_in(), html.escape(event['name']),
                    html.escape(twstats.course_name(event['course'])),
                    twtourney.money(event['purse']),
                    twtourney.from_day(day).strftime('%A %d %B %Y'),
@@ -1398,7 +1519,9 @@ and none is distributed here.</p>
                     '<td>%d</td><td>%s</td><td>%s of %d</td></tr>'
                     % (twtourney.from_day(r['day']).strftime('%d %b %Y'),
                        esc(who),
-                       esc(r['event']) if r['named']
+                       '<a class="pl" href="%s">%s</a>' % (
+                           event_href(r['day']), esc(r['event']))
+                       if r['named']
                        else '<span class="sub">unrecorded</span>',
                        esc(twstats.course_name(r['course'])), r['strokes'],
                        twtourney.to_par(r['fields'], r['par']),
@@ -1427,12 +1550,16 @@ and none is distributed here.</p>
             when = twtourney.from_day(e['day'])
             # All four settings, always: in their own columns on a wide
             # screen, and as a line under the event's name on a phone.
+            # Today's date goes to its leaderboard; later days have none yet.
+            date = when.strftime('%a %d %b')
+            if e['day'] == today:
+                date = '<a class="pl" href="%s">%s</a>' % (event_href(today), date)
             rows.append('<tr%s><td>%s</td><td><a class="pl" href="#pay-%d">'
                         '<strong>%s</strong></a>'
                         '<div class="show-sm">%s</div></td>'
                         '<td>%s</td>%s<td class="num">%s</td></tr>'
                         % (' class="me"' if e['day'] == today else '',
-                           when.strftime('%a %d %b'), e['day'], esc(e['name']),
+                           date, e['day'], esc(e['name']),
                            conditions_line(e.get('conditions')),
                            esc(course), conditions_cells(e.get('conditions')),
                            twtourney.money(e['purse'])))
@@ -1468,14 +1595,14 @@ and none is distributed here.</p>
             rows.append('<tr><td class="rank%s">%d</td>'
                         '<td><strong>%s</strong></td><td class="num">%s</td>'
                         '<td class="num">%d</td><td class="num">%d</td>'
-                        '<td class="num">%s</td></tr>'
+                        '<td class="num hide-sm">%s</td></tr>'
                         % (' rank-1' if n == 1 else '', n, plink(r['name']),
                            twtourney.money(r['earned']), r['rounds'], r['wins'],
                            _ordinal(r['best']) if r['best'] else '&ndash;'))
         cards.append('<h2>Money list</h2>' + (
             '<table><thead><tr><th>#</th><th>Golfer</th>'
             '<th class="num">Earnings</th><th class="num">Events</th>'
-            '<th class="num">Wins</th><th class="num">Best</th></tr></thead>'
+            '<th class="num">Wins</th><th class="num hide-sm">Best</th></tr></thead>'
             '<tbody>' + ''.join(rows) + '</tbody></table>' if rows else
             '<p class="foot" style="margin:0">Nobody has played an event yet.</p>'))
 
@@ -1488,18 +1615,24 @@ and none is distributed here.</p>
             # existed would otherwise be labelled with whatever event that day
             # happens to be today.
             name = w.get('event') or ''
-            rows.append('<tr><td>%s</td><td>%s</td><td>%s</td>'
+            rows.append('<tr><td>%s</td><td>%s</td><td class="hide-sm">%s</td>'
                         '<td><strong>%s</strong></td><td class="num">%d</td>'
-                        '<td class="num">%s</td></tr>'
-                        % (twtourney.from_day(r['day']).strftime('%d %b %Y'),
-                           esc(name) if name else '<span class="foot">unrecorded</span>',
-                           esc(twstats.course_name(w['course'])), plink(w['name']),
+                        '<td class="num hide-sm">%s</td></tr>'
+                        % ('<a class="pl" href="%s">%s</a>' % (
+                               event_href(r['day']),
+                               twtourney.from_day(r['day']).strftime('%d %b %Y')),
+                           '<a class="pl" href="%s">%s</a>' % (
+                               event_href(r['day']), esc(name))
+                           if name else '<span class="foot">unrecorded</span>',
+                           esc(twstats.course_name(w['course'])),
+                           ' &amp; '.join(plink(x['name']) for x in r['winners']),
                            w['strokes'],
                            _topar(twtourney.to_par(w['fields'], w['par']))))
         if rows:
             cards.append('<h2>Recent winners</h2><table><thead><tr><th>Date</th>'
-                         '<th>Event</th><th>Course</th><th>Winner</th>'
-                         '<th class="num">Score</th><th class="num">To par</th>'
+                         '<th>Event</th><th class="hide-sm">Course</th>'
+                         '<th>Winner</th><th class="num">Score</th>'
+                         '<th class="num hide-sm">To par</th>'
                          '</tr></thead><tbody>' + ''.join(rows) + '</tbody></table>')
 
         # Today's event leads this page as well as the front one.  It is the
@@ -1582,11 +1715,14 @@ and none is distributed here.</p>
                              % p['longest_putt'])
 
         h2h = ''.join(
-            '<tr><td>%s</td><td class="num">%d</td><td class="num">%d&ndash;%d'
-            '&ndash;%d</td><td class="num">%s</td></tr>'
-            % (plink(e['opponent']), e['W'] + e['L'] + e['T'], e['W'], e['L'],
-               e['T'], _date(e['last']))
+            '<tr><td>%s</td><td class="num">%d</td><td class="num">'
+            '<a class="pl" href="%s">%d&ndash;%d&ndash;%d</a></td>'
+            '<td class="num">%s</td></tr>'
+            % (plink(e['opponent']), e['W'] + e['L'] + e['T'],
+               h2h_href(name, e['opponent']), e['W'], e['L'], e['T'],
+               _date(e['last']))
             for e in p['head_to_head'])
+        achieved = twrecords.achievements(rs, name)
 
         sub_bits = ['Playing since %s' % _date(p['first'])]
         if p['favourite']:
@@ -1598,6 +1734,16 @@ and none is distributed here.</p>
                 % (html.escape(name),
                    ' <span class="tag playing">online now</span>' if online else '',
                    ' &middot; '.join(sub_bits), ''.join(figs)))
+        body += ('<div class="card"><h2>Achievements &middot; %d of %d</h2>'
+                 '<div class="ach">%s</div></div>' % (
+                     sum(1 for a in achieved if a['when']), len(achieved),
+                     ''.join('<div class="%s"><b>%s</b><span>%s</span>'
+                             '<span>%s</span></div>'
+                             % ('got' if a['when'] else 'no',
+                                html.escape(a['title']), html.escape(a['how']),
+                                'Earned %s' % _date(a['when']) if a['when']
+                                else html.escape(a['progress']) or 'Not yet')
+                             for a in achieved)))
         body += ('<div class="card"><h2>Tour stats</h2><table><thead><tr>'
                  '<th>Stat</th><th class="num">Value</th><th class="num">Rank'
                  '</th></tr></thead><tbody>%s</tbody></table><p class="foot" '
@@ -1607,12 +1753,55 @@ and none is distributed here.</p>
         if h2h:
             body += ('<div class="card"><h2>Head to head</h2><table><thead><tr>'
                      '<th>Opponent</th><th class="num">Played</th>'
-                     '<th class="num">W&ndash;L&ndash;T</th>'
+                     '<th class="num">W&ndash;L&ndash;H</th>'
                      '<th class="num">Last played</th></tr></thead><tbody>%s'
                      '</tbody></table></div>' % h2h)
         body += ('<div class="card"><h2>Recent rounds</h2>%s</div>'
                  % _rounds_table(p['recent'], who=False))
         return self.reply(page(name, body, signed_in=bool(session)))
+
+    def activity_card(self):
+        """The last 30 days as two bar charts: rounds and matches played, and
+        the most players online at once.  Plain CSS -- the site has no
+        script, and a chart this simple does not need one."""
+        days = DB.activity_days(30)
+        today = days[-1][0]
+        busiest = max([r + m for _d, r, m, _p in days] + [1])
+        peak = max([p or 0 for _d, _r, _m, p in days] + [1])
+
+        def col(d, bars, tip):
+            return ('<div%s title="%s">%s</div>'
+                    % (' class="today"' if d == today else '', tip, ''.join(
+                        '<i class="%s" style="height:%.1f%%"></i>' % (c, h)
+                        for c, h in bars if h)))
+
+        def label(d):
+            return twtourney.from_day(d).strftime('%d %b')
+
+        played = ''.join(col(d, (('r', 100.0 * r / busiest),
+                                 ('m', 100.0 * m / busiest)),
+                             '%s: %d tournament round%s, %d match%s'
+                             % (label(d), r, '' if r == 1 else 's',
+                                m, '' if m == 1 else 'es'))
+                         for d, r, m, _p in days)
+        online = ''.join(col(d, (('p', 100.0 * (p or 0) / peak),),
+                             '%s: %s' % (label(d), 'no record' if p is None
+                                         else '%d online at once' % p))
+                         for d, _r, _m, p in days)
+        axis = ('<div class="axis"><span>%s</span><span>%s</span>'
+                '<span>today</span></div>' % (label(days[0][0]),
+                                              label(days[len(days) // 2][0])))
+        return ('<div class="card"><h2>The last 30 days</h2>'
+                '<p class="key"><i class="r" style="background:var(--gold)"></i>'
+                'Tournament rounds <i style="background:#4f9a66"></i>Matches'
+                ' &middot; busiest day %d</p><div class="chart">%s</div>%s'
+                '<p class="key" style="margin-top:1.4rem"><i style="background:'
+                '#8fd0a3"></i>Most players online at once &middot; peak %d</p>'
+                '<div class="chart" style="height:80px">%s</div>%s</div>'
+                % (busiest if any(r + m for _d, r, m, _p in days) else 0,
+                   played, axis,
+                   peak if any(p for _d, _r, _m, p in days) else 0,
+                   online, axis))
 
     def stats_page(self, session):
         rs = twrecords.rounds(DB)
@@ -1639,8 +1828,8 @@ and none is distributed here.</p>
                 'server, head to head and tournament.  Averages need at least %d '
                 'rounds to qualify; scoring counts 18-hole rounds only, and the '
                 'rest are per 18 holes so a Front 9 counts for half.</p>'
-                '<div class="statgrid">%s</div>'
-                % (twrecords.MIN_ROUNDS, ''.join(cards)))
+                '%s<div class="statgrid">%s</div>'
+                % (twrecords.MIN_ROUNDS, self.activity_card(), ''.join(cards)))
         return page('Stats', body, signed_in=bool(session))
 
     def records_page(self, session):
@@ -1761,6 +1950,281 @@ and none is distributed here.</p>
         body += ('<div class="card"><h2>Recent rounds</h2>%s</div>'
                  % _rounds_table(c['recent'], course=False))
         return self.reply(page(c['name'], body, signed_in=bool(session)))
+
+    # -- one event, and two players -----------------------------------------
+    def event_page(self, date, session):
+        """/event/YYYY-MM-DD: an event's details and its whole field, with
+        each player's place and prize.  Today's is live; a future one shows
+        what is coming."""
+        try:
+            when = datetime.date.fromisoformat(date)
+        except ValueError:
+            return self.not_found('Event', 'That is not a date.', session)
+        day, today = twtourney.to_day(when), twtourney.today()
+        event = DB.event(day)
+        board = DB.tourney_day(day, limit=1000)
+        if not event and not board:
+            return self.not_found('Event', 'There was no event on %s.'
+                                  % when.strftime('%d %B %Y'), session)
+        name = ((board[0]['event'] if board else '') or
+                (event['name'] if event else 'Online Tournament'))
+        course = event['course'] if event else board[0]['course']
+        purse = event['purse'] if event else 0
+
+        state = ('<span class="tag playing">in progress &middot; closes in %s'
+                 '</span>' % closes_in() if day == today else
+                 '<span class="tag">not played yet</span>' if day > today else
+                 '<span class="tag">final</span>')
+        nav = '<p class="foot" style="margin:0 0 1rem">%s%s</p>' % (
+            '<a class="pl" href="%s">&larr; %s</a>' % (
+                event_href(day - 1),
+                twtourney.from_day(day - 1).strftime('%d %b')),
+            ' &middot; <a class="pl" href="%s">%s &rarr;</a>' % (
+                event_href(day + 1),
+                twtourney.from_day(day + 1).strftime('%d %b'))
+            if day < today else '')
+        figs = [_figure(twtourney.money(purse) if purse else '&ndash;', 'Purse'),
+                _figure(len(board), 'Entrants')]
+        if board:
+            figs.append(_figure(board[0]['strokes'], 'Winning score'
+                                if day < today else 'Leading score'))
+        body = ('%s<h1>%s %s</h1><p class="sub">%s &middot; %s</p>'
+                '<div class="card"><p style="margin:0 0 1rem">%s</p>'
+                '<div class="figures">%s</div></div>'
+                % (nav, html.escape(name), state, clink(course),
+                   when.strftime('%A %d %B %Y'),
+                   conditions_line(event.get('conditions') if event else None),
+                   ''.join(figs)))
+        if board:
+            rows = ''.join(
+                '<tr%s><td class="rank%s">%s</td><td>%s</td>'
+                '<td class="num">%d</td><td class="num">%s</td>'
+                '<td class="num">%s</td></tr>'
+                % (' class="me"' if r['place'] == 1 else '',
+                   ' rank-1' if r['place'] == 1 else '', _place(r),
+                   plink(r['name']), r['strokes'],
+                   _topar(twtourney.to_par(r['fields'], r['par'])),
+                   twtourney.money(prize(purse, r['place'], r['tied']))
+                   if purse else '&ndash;')
+                for r in board)
+            body += ('<div class="card"><h2>%s</h2><table><thead><tr>'
+                     '<th>Pos</th><th>Golfer</th><th class="num">Score</th>'
+                     '<th class="num">To par</th><th class="num">Prize</th>'
+                     '</tr></thead><tbody>%s</tbody></table>%s</div>'
+                     % ('Leaderboard' if day >= today else 'Final leaderboard',
+                        rows,
+                        '<p class="foot" style="margin:.8rem 0 0">Still open, so '
+                        'places and prizes can change until midnight.</p>'
+                        if day == today else ''))
+        elif day <= today:
+            body += ('<div class="card"><p class="sub" style="margin:0">Nobody '
+                     'posted a score%s.</p></div>'
+                     % (' yet' if day == today else ''))
+        return self.reply(page(name, body, signed_in=bool(session)))
+
+    def h2h_page(self, a, b, session):
+        """/h2h/<a>/<b>: two players' record against each other."""
+        rs = twrecords.rounds(DB)
+        h = twrecords.head_to_head(rs, a, b)
+        if h is None:
+            pa, pb = DB.persona(a), DB.persona(b)
+            if not pa or not pb:
+                return self.not_found('Head to head', 'Nobody here is called '
+                                      '<strong>%s</strong>.' % html.escape(
+                                          a if not pa else b), session)
+            return self.reply(page('%s v %s' % (pa['name'], pb['name']), (
+                '<h1>%s v %s</h1><div class="card"><p class="sub" '
+                'style="margin:0">They have not finished a match against each '
+                'other yet.</p></div>' % (plink(pa['name']), plink(pb['name']))),
+                signed_in=bool(session)))
+        a, b = h['a'], h['b']
+        figs = [_figure(h['W'], '%s wins' % html.escape(a)),
+                _figure(h['T'], 'Halved'),
+                _figure(h['L'], '%s wins' % html.escape(b))]
+        kinds = ' &middot; '.join(
+            '%s %d&ndash;%d&ndash;%d' % (label, t['W'], t['L'], t['T'])
+            for kind, label in (('match', 'Match play'), ('stroke', 'Stroke play'))
+            for t in [h['kinds'].get(kind)] if t)
+
+        def score(r):
+            return _score(r) if r else '&ndash;'
+
+        rows = ''.join(
+            '<tr><td>%s</td><td class="hide-sm">%s</td><td class="hide-sm">%s'
+            '</td><td class="num">%s</td><td class="num">%s</td><td>%s</td></tr>'
+            % (_date(m['when']),
+               'Match play' if m['kind'] == 'match' else 'Stroke play',
+               clink(m['course']), score(m['mine']), score(m['theirs']),
+               '%s won' % html.escape(a) if m['result'] == 'W' else
+               '%s won' % html.escape(b) if m['result'] == 'L' else 'Halved')
+            for m in h['meetings'][:10])
+        body = ('<h1>%s <span class="foot" style="font-size:1rem">v</span> %s</h1>'
+                '<p class="sub">%d meeting%s%s &middot; <a class="pl" href="%s">'
+                'see it from %s&rsquo;s side</a></p>'
+                '<div class="card"><h2>Record</h2><div class="figures">%s</div>'
+                '</div><div class="card"><h2>Last meetings</h2><table><thead><tr>'
+                '<th>Date</th><th class="hide-sm">Round</th>'
+                '<th class="hide-sm">Course</th><th class="num">%s</th><th class="num">%s</th><th>Result</th>'
+                '</tr></thead><tbody>%s</tbody></table></div>'
+                % (plink(a), plink(b), len(h['meetings']),
+                   '' if len(h['meetings']) == 1 else 's',
+                   (' &middot; ' + kinds) if kinds else '', h2h_href(b, a),
+                   html.escape(b), ''.join(figs), html.escape(a),
+                   html.escape(b), rows))
+        return self.reply(page('%s v %s' % (a, b), body, signed_in=bool(session)))
+
+    # -- the operator's admin page ------------------------------------------
+    @staticmethod
+    def admin_allowed(key):
+        return bool(ADMIN_KEY) and secrets.compare_digest(
+            key.encode('utf-8'), ADMIN_KEY.encode('utf-8'))
+
+    @staticmethod
+    def news_file_text():
+        try:
+            with open(NEWS_FILE, encoding='utf-8') as f:
+                return f.read()
+        except OSError:
+            return ''
+
+    def do_admin(self, action, fields):
+        """Carry out one admin form and show the page again with the result.
+
+        No redirect: a reset password is shown once, in the page itself, and
+        must never travel in a URL where logs and browser history keep it.
+        """
+        query = fields.get('q', '')
+        try:
+            if action == 'password':
+                acct = DB.one('SELECT * FROM accounts WHERE id = ?',
+                              (int(fields.get('id') or 0),))
+                if not acct:
+                    raise twdb.Error('no such account')
+                new = fields.get('password', '').strip() or new_password()
+                DB.set_password(acct['id'], new)
+                note = ('%s\'s password is now %s -- give it to them, then '
+                        'they can change it on their account page'
+                        % (acct['name'], new))
+            elif action == 'ban':
+                acct = DB.one('SELECT * FROM accounts WHERE id = ?',
+                              (int(fields.get('id') or 0),))
+                if not acct:
+                    raise twdb.Error('no such account')
+                ban = fields.get('ban') == '1'
+                DB.set_disabled(acct['id'], ban)
+                note = ('banned %s -- they cannot sign in, on the console or '
+                        'here; anyone already in the lobby stays until they '
+                        'leave' % acct['name'] if ban else
+                        'lifted the ban on %s' % acct['name'])
+            elif action == 'rename':
+                old = fields.get('persona', '')
+                if any(o['persona'].lower() == old.lower()
+                       for o in DB.online()):
+                    raise twdb.Error('%s is online right now -- rename them '
+                                     'once they have signed off' % old)
+                new = DB.rename_persona(old, fields.get('name', ''))
+                note = 'renamed %s to %s, with all their results' % (old, new)
+                query = query or new
+            elif action == 'news':
+                text = fields.get('news', '').replace('\r\n', '\n')
+                if len(text) > NEWS_LIMIT:
+                    raise twdb.Error('the news is %d characters; the limit is %d'
+                                     % (len(text), NEWS_LIMIT))
+                if any(ord(c) > 126 or (ord(c) < 32 and c != '\n')
+                       for c in text):
+                    raise twdb.Error('the PS2 can only show plain ASCII -- '
+                                     'take out accents, curly quotes and emoji')
+                with open(NEWS_FILE, 'w', encoding='utf-8', newline='\n') as f:
+                    f.write(text)
+                note = 'news saved -- the next player to open NEWS sees it'
+            else:
+                return self.reply(page('Not found', '<h1>Not found</h1>'),
+                                  status=404)
+        except (twdb.Error, ValueError, OSError) as exc:
+            return self.reply(self.admin_page(query, str(exc), kind='err',
+                                              news=fields.get('news')),
+                              headers=PRIVATE)
+        LOG.write('%s admin %s: %s' % (time.strftime('%H:%M:%S'), action,
+                                       note if action != 'password'
+                                       else 'reset for %s' % acct['name']))
+        return self.reply(self.admin_page(query, note, kind='ok'),
+                          headers=PRIVATE)
+
+    def admin_page(self, query='', note=None, kind='ok', news=None):
+        """Find an account, then reset its password, ban it or rename one of
+        its personas; and edit the in-game news."""
+        base = '/admin/%s' % ADMIN_KEY
+        esc = lambda v: html.escape(str(v or ''), quote=True)      # noqa: E731
+        online = {o['persona'].lower() for o in DB.online()}
+        found = DB.find_accounts(query) if query.strip() else []
+
+        accts = []
+        for a in found:
+            personas = ''.join(
+                '<form method="post" action="%s/rename"><span class="lbl">'
+                'Persona <strong style="color:var(--ink)">%s</strong>%s</span>'
+                '<input type="hidden" name="q" value="%s">'
+                '<input type="hidden" name="persona" value="%s">'
+                '<input type="text" name="name" placeholder="new name" '
+                'maxlength="%d" required><button class="quiet" type="submit">'
+                'Rename</button></form>'
+                % (base, esc(p), ' <span class="tag playing">online</span>'
+                   if p.lower() in online else '', esc(query), esc(p),
+                   twdb.MAX_NAME)
+                for p in a['personas'])
+            accts.append(
+                '<div class="admin-acct"><p style="margin:0"><strong>%s</strong>'
+                '%s <span class="foot">&middot; %s &middot; joined %s &middot; '
+                '%s</span></p>%s'
+                '<form method="post" action="%s/password"><span class="lbl">'
+                'Password</span><input type="hidden" name="q" value="%s">'
+                '<input type="hidden" name="id" value="%d">'
+                '<input type="text" name="password" placeholder="blank makes '
+                'one up" maxlength="%d" autocomplete="off">'
+                '<button type="submit">Reset</button></form>'
+                '<form method="post" action="%s/ban"><span class="lbl">Access'
+                '</span><input type="hidden" name="q" value="%s">'
+                '<input type="hidden" name="id" value="%d">'
+                '<input type="hidden" name="ban" value="%s">'
+                '<button class="quiet" type="submit">%s</button></form></div>'
+                % (esc(a['name']), ' <span class="tag bad">banned</span>'
+                   if a['disabled'] else '', esc(a['mail']) or 'no email',
+                   _date(a['created']),
+                   'last signed in %s' % _date(a['last_seen'])
+                   if a['last_seen'] else 'never signed in',
+                   personas, base, esc(query), a['id'], twdb.MAX_PASSWORD,
+                   base, esc(query), a['id'], '0' if a['disabled'] else '1',
+                   'Lift ban' if a['disabled'] else 'Ban account'))
+        results = (''.join(accts) if accts else
+                   '<p class="foot" style="margin:1rem 0 0">No account or '
+                   'persona matches that.</p>' if query.strip() else '')
+
+        text = self.news_file_text() if news is None else news
+        body = ('<h1>Admin</h1><p class="sub">Not linked from anywhere &mdash; '
+                'keep this address to yourself.</p>'
+                '<div class="card"><h2>Accounts</h2>'
+                '<form method="get" action="%s" class="row" style="align-items:'
+                'flex-end"><div style="flex:3 1 14rem"><label>Account or persona'
+                '</label><input type="text" name="q" value="%s" autofocus></div>'
+                '<div style="flex:0 0 auto"><button type="submit" style="margin:0">'
+                'Find</button></div></form>'
+                '<p class="foot" style="margin:.8rem 0 1.2rem">A new password '
+                'must be %d&ndash;%d characters. A ban blocks the whole account, '
+                'all its personas. Renaming carries the persona&rsquo;s results, '
+                'rounds and buddies with it; do it while they are offline.</p>'
+                '%s</div>'
+                '<div class="card"><h2>In-game news</h2>'
+                '<form method="post" action="%s/news"><textarea name="news" '
+                'maxlength="%d" spellcheck="true">%s</textarea>'
+                '<p class="foot" style="margin:.5rem 0 0">Plain ASCII, up to %d '
+                'characters; the NEWS screen wraps at 64. The server&rsquo;s '
+                'automatic digest of recent results follows it. Saved to '
+                '<code>%s</code>.</p><button type="submit">Save news</button>'
+                '</form></div>'
+                % (base, esc(query), twdb.MIN_PASSWORD, twdb.MAX_PASSWORD,
+                   results, base, NEWS_LIMIT, html.escape(text), NEWS_LIMIT,
+                   esc(NEWS_FILE)))
+        return page('Admin', body, message=note, kind=kind, stats=False)
 
     # -- the operator's abuse reports ---------------------------------------
     @staticmethod
@@ -2008,7 +2472,7 @@ class Server(socketserver.ThreadingTCPServer):
 
 def main(argv=None):
     global DB, BASE, TRUST_PROXY, SECURE_COOKIE, ADVERTISE, LOBBY_PORT
-    global REPORTS_KEY, LOG
+    global REPORTS_KEY, ADMIN_KEY, NEWS_FILE, LOG
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--db', default=twdb.DEFAULT_DB)
@@ -2041,6 +2505,14 @@ def main(argv=None):
                          '/reports/<key>.  Default: made once and kept in '
                          'reports.key beside the database.  "off" disables '
                          'the page')
+    ap.add_argument('--admin-key', default='',
+                    help='the secret in the admin page address, /admin/<key>. '
+                         'Default: made once and kept in admin.key beside the '
+                         'database.  "off" disables the page')
+    ap.add_argument('--news', default='',
+                    help='the in-game news file the admin page edits; give '
+                         'lobbyd the same one.  Default: news.txt beside the '
+                         'database, which is also lobbyd\'s default')
     ap.add_argument('--logfile', default=DEFAULT_LOG,
                     help='the request log (default logs/webui.log beside '
                          'data/).  Empty for none')
@@ -2070,6 +2542,12 @@ def main(argv=None):
         say('abuse reports (%d open) -- private, do not share this address:'
               % DB.count_open_reports())
         say('    %s/reports/%s' % (BASE, REPORTS_KEY))
+    NEWS_FILE = os.path.abspath(args.news or os.path.join(
+        os.path.dirname(DB.path), 'news.txt'))
+    if args.admin_key != 'off':
+        ADMIN_KEY = reports_key(DB.path, args.admin_key, name='admin.key')
+        say('admin page -- password resets, bans, renames, news; private:')
+        say('    %s/admin/%s' % (BASE, ADMIN_KEY))
     say('lobbyd must be given this SAME path; it prints the one it opened.')
     say('sign-up site on http://%s:%d%s/'
           % ('localhost' if args.host in ('0.0.0.0', '') else args.host,

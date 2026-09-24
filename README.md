@@ -4,10 +4,6 @@ A replacement for EA's long-dead online service for **Tiger Woods PGA Tour 2004*
 on the PlayStation 2, for playing online through the
 [PCSX2](https://pcsx2.net) emulator.
 
-My server is online at https://jeddyh.fyi/TW04Online
-
-Create an account on the website and use it to log into the games Online feature, the in-game account creation does not work.
-
 It brings back the game's whole online menu:
 
 - **Lobby:** accounts and personas, game rooms, chat, and challenges.
@@ -20,7 +16,10 @@ It brings back the game's whole online menu:
 
 Alongside the lobby runs a **web site**. Players create their account and
 download the game patch there. It also shows live server status, leaderboards,
-the tournament calendar, player profiles, tour stats, records and course pages.
+the tournament calendar with a page for every event, player profiles with
+achievements, head-to-head records, tour stats with a 30-day activity chart,
+records and course pages. A private admin page covers password resets, bans,
+renames and the in-game news.
 
 Both are plain Python with **no dependencies**: no framework, no database
 server, no build step.
@@ -237,7 +236,34 @@ CRC `64F9781E`**, and no other release.
 
 ## Looking after it
 
-### Accounts
+### The admin page
+
+Most day-to-day jobs are on a page that nothing links to:
+
+```
+<your site>/admin/<key>
+```
+
+Find an account by its name or any of its personas, then:
+
+- **Reset its password.** Type one, or leave the box empty and the page makes
+  up an 8-character one that's easy to type on the console keyboard. The new
+  password is shown once, on the page. Players can't recover a password by
+  themselves, so this is how a forgotten one gets fixed.
+- **Ban the account, or lift a ban.** A ban blocks signing in, on the console
+  and on the web site, for all of the account's personas. Anyone already in
+  the lobby stays until they leave.
+- **Rename a persona.** Its results, tournament rounds, buddies and reports
+  move with it. The page refuses while that persona is online.
+
+The same page edits the in-game news (see below).
+
+The key is created the first time the web site starts, kept in
+`data/admin.key`, and printed at every start. Anyone with the address can do
+all of the above, so keep it private. To change it, delete the file and restart
+the site. `webui.py --admin-key off` turns the page off.
+
+### Accounts from the shell
 
 ```bash
 python3 twdb.py --list
@@ -252,8 +278,10 @@ account can hold up to four personas.
 
 ### News
 
-The game's news screen shows the text of `data/news.txt`, if it exists. It's
-re-read on every request, so you can edit it while the server runs. Below it,
+The game's news screen shows the text of `data/news.txt`, if it exists. Edit
+it on the admin page, or by hand. It's re-read on every request, so a change
+shows up for the next player who opens the screen. The PS2 can only show plain
+ASCII, and the admin page won't save anything else. Below it,
 the server adds a digest it writes itself: today's event and leader,
 yesterday's winner, the week's new records, and the busiest player.
 `--no-auto-news` turns the digest off.
@@ -271,8 +299,8 @@ nothing links to:
 The key is created the first time the web site starts, kept in
 `data/reports.key`, and printed at every start. Anyone with the address can
 read the reports, so keep it private. To change it, delete the file and
-restart the site. `webui.py --reports-key off` turns the page off. Banning is
-done from the shell, with `twdb.py --disable`.
+restart the site. `webui.py --reports-key off` turns the page off. To ban
+someone, use the admin page or `twdb.py --disable`.
 
 ## Options
 
@@ -307,6 +335,8 @@ The most useful ones; `--help` on either program lists them all.
 | `--lobby-port N` | `10200` | the lobby port put in the patch, if the lobby hasn't published one |
 | `--no-secure-cookie` | | for testing over plain HTTP only |
 | `--reports-key KEY` | *(from `data/reports.key`)* | the abuse-reports page's secret; `off` turns the page off |
+| `--admin-key KEY` | *(from `data/admin.key`)* | the admin page's secret; `off` turns the page off |
+| `--news FILE` | `data/news.txt` | the news file the admin page edits; must be the lobby's `--news` |
 | `--db PATH` | `data/tw04.db` | the database; must be the same file the lobby uses |
 | `--logfile FILE` | `logs/webui.log` | the request log; `''` for none |
 
@@ -319,6 +349,7 @@ in `.gitignore`.
 |---|---|
 | `data/tw04.db` | the database: every account and password hash, results, tournaments, buddy lists and reports. **Back this up.** |
 | `data/reports.key` | the secret in the abuse-reports page's address |
+| `data/admin.key` | the secret in the admin page's address |
 | `data/news.txt` | your news text, if you create it |
 | `logs/lobbyd.log`, `logs/webui.log` | the logs, each capped at `LOG_MAX_MB` with `LOG_KEEP` old copies |
 
@@ -339,7 +370,9 @@ python3 tests/lobbyd_livetest.py      # the live picture the web site reads
 python3 tests/lobbyd_buddytest.py     # EA Messenger
 python3 tests/lobbyd_reporttest.py    # abuse reports and their private page
 python3 tests/twdb_statstest.py       # scoring real captured rounds
+python3 tests/twdb_tourneytest.py     # ties, open days, and every match counted
 python3 tests/webui_pagestest.py      # player, stats, records and course pages; the news
+python3 tests/webui_featurestest.py   # event, head-to-head and admin pages; achievements
 ```
 
 Most modules also test themselves: `python3 twrecords.py`, `twlog.py`,
