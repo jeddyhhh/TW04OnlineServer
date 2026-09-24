@@ -1,12 +1,12 @@
 # Tiger Woods PGA Tour 2004 — online master server
 
-My server is online at https://jeddyh.fyi/TW04Online
-
-Create an account on the website and use it to log into the games Online feature, the in-game account creation does not work.
-
 A replacement for EA's long-dead online service for **Tiger Woods PGA Tour 2004**
 on the PlayStation 2, for playing online through the
 [PCSX2](https://pcsx2.net) emulator.
+
+My server is online at https://jeddyh.fyi/TW04Online
+
+Create an account on the website and use it to log into the games Online feature, the in-game account creation does not work.
 
 It brings back the game's whole online menu:
 
