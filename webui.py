@@ -1615,9 +1615,15 @@ and none is distributed here.</p>
             # existed would otherwise be labelled with whatever event that day
             # happens to be today.
             name = w.get('event') or ''
+            # What each winner took home: 1st place's share, split evenly when
+            # the win was shared.
+            purse = e['purse'] if e else 0
+            won = (twtourney.money(prize(purse, 1, len(r['winners'])))
+                   if purse else '&ndash;')
             rows.append('<tr><td>%s</td><td>%s</td><td class="hide-sm">%s</td>'
-                        '<td><strong>%s</strong></td><td class="num">%d</td>'
-                        '<td class="num hide-sm">%s</td></tr>'
+                        '<td><strong>%s</strong></td><td class="num hide-sm">%d</td>'
+                        '<td class="num hide-sm">%s</td><td class="num">%s</td>'
+                        '</tr>'
                         % ('<a class="pl" href="%s">%s</a>' % (
                                event_href(r['day']),
                                twtourney.from_day(r['day']).strftime('%d %b %Y')),
@@ -1627,12 +1633,14 @@ and none is distributed here.</p>
                            esc(twstats.course_name(w['course'])),
                            ' &amp; '.join(plink(x['name']) for x in r['winners']),
                            w['strokes'],
-                           _topar(twtourney.to_par(w['fields'], w['par']))))
+                           _topar(twtourney.to_par(w['fields'], w['par'])),
+                           won))
         if rows:
             cards.append('<h2>Recent winners</h2><table><thead><tr><th>Date</th>'
                          '<th>Event</th><th class="hide-sm">Course</th>'
-                         '<th>Winner</th><th class="num">Score</th>'
+                         '<th>Winner</th><th class="num hide-sm">Score</th>'
                          '<th class="num hide-sm">To par</th>'
+                         '<th class="num">Earnings</th>'
                          '</tr></thead><tbody>' + ''.join(rows) + '</tbody></table>')
 
         # Today's event leads this page as well as the front one.  It is the

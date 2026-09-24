@@ -1041,8 +1041,9 @@ class DB:
         the Tour does: two tied for 1st each get (1st + 2nd) / 2.
 
         `open_day` (default: today) and after are still being played, so they
-        count towards rounds and earnings -- a live standing -- but not towards
-        `wins` or `best`, which only a finished event can give.
+        count towards `rounds` but not towards `earned`, `wins` or `best`: no
+        prize is paid until the event is over (Jed, 2026-09-25 -- a player
+        leading today's event must not see its winner's share yet).
         """
         if open_day is None:
             open_day = twtourney.today()
@@ -1064,7 +1065,7 @@ class DB:
                     e['wins'] += (place == 1)
                     e['best'] = (place if e['best'] is None
                                  else min(e['best'], place))
-                if payout:
+                if payout and day < open_day:
                     e['earned'] += sum(payout(purse, p) for p in
                                        range(place, place + tied)) // tied
         return sorted(table.values(), key=lambda r: (-r['earned'], r['strokes']))
