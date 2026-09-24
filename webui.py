@@ -1092,6 +1092,11 @@ your ISO &mdash; deleting the file below puts everything back.</p>
   up to four personas, and you can add more once you are signed in here.</li>
 <li>Passwords are %d&ndash;%d characters. The console's keyboard is limited, so
   something short and plain travels better.</li>
+<li><strong>First time only:</strong> the game needs a PlayStation&nbsp;2
+  network configuration on the memory card. If there is none, it says so when
+  you choose <em>ONLINE</em> and offers to create one with the network
+  configurator on the game disc. Don't change anything there &mdash; just save
+  the default settings to the memory card. You won't be asked again.</li>
 <li>On the console choose <em>ONLINE</em> from the main menu, let it pass the
   DNAS screen, then enter the same account name and password. Pick your persona
   on the SELECT ACCOUNT screen.</li>

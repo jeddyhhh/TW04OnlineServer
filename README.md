@@ -4,10 +4,6 @@ A replacement for EA's long-dead online service for **Tiger Woods PGA Tour 2004*
 on the PlayStation 2, for playing online through the
 [PCSX2](https://pcsx2.net) emulator.
 
-My server is online at https://jeddyh.fyi/TW04Online
-
-Create an account on the website and use it to log into the games Online feature, the in-game account creation does not work.
-
 It brings back the game's whole online menu:
 
 - **Lobby:** accounts and personas, game rooms, chat, and challenges.
@@ -222,7 +218,12 @@ patch file. In short, in PCSX2:
      you into the lobby, but matches never start;
    - set **DNS1** to a real resolver, such as your router or `1.1.1.1`.
      Leaving it on Auto makes the game's DNAS screen slow, especially on Linux.
-3. **Sign in.** Create an account on the web site, then sign in on the
+3. **Save a network configuration (first time only).** The game needs a
+   PlayStation 2 network configuration on the memory card. If there isn't one,
+   the game says so when you choose ONLINE and offers to create one with the
+   network configurator on the game disc. Don't change anything: just save
+   the default settings to the memory card.
+4. **Sign in.** Create an account on the web site, then sign in on the
    console's ONLINE menu with the same account name and password. Choose a
    persona on the SELECT ACCOUNT screen.
 
