@@ -118,7 +118,7 @@ def main():
     proc = subprocess.Popen(
         [sys.executable, os.path.join(HERE, 'lobbyd.py'),
          '--host', '127.0.0.1', '--port', str(PORT),
-         '--password', PASSWORD, '--logfile', LOG, '--ping', '0',
+         '--password', PASSWORD, '--logfile', LOG, '--ping', '0', '--backup-keep', '0',
          '--db', TEST_DB, '--open', '--buddy-port', '0'],
         stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
     fails = []

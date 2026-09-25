@@ -261,7 +261,7 @@ def start_server():
         [sys.executable, os.path.join(HERE, 'lobbyd.py'),
          '--host', '127.0.0.1', '--port', str(PORT),
          '--buddy-port', str(BUDDY_PORT), '--logfile', '',
-         '--ping', '0', '--db', TEST_DB],
+         '--ping', '0', '--backup-keep', '0', '--db', TEST_DB],
         stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 
 

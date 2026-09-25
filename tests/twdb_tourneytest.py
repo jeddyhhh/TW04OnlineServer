@@ -14,9 +14,13 @@ Three rules, each of which the site once got wrong:
    to read only the newest few hundred matches, so both stopped growing.
 4. **MY RESUME carries the tournaments.**  The console's stats record used to
    be built from head-to-head matches alone, so a tournament player's resume
-   read all zeros.
+   read all zeros.  Tiger Status climbs with online points.
+5. **One backup a day.**  The daily copy is made once, opens as a database,
+   and only the newest few are kept.
 """
+import datetime
 import os
+import sqlite3
 import sys
 import tempfile
 
@@ -121,6 +125,31 @@ def ties_and_open_days(db):
           "carol's RNKRS should hold rank 3 in word 10 only: %r" % (words,))
 
 
+def tiger_and_backups(db, folder):
+    steps = [(p, twstats.tiger_status(p)) for p in (0, 49, 50, 100, 199, 200,
+                                                     499, 500, 5000)]
+    check(steps == [(0, 0), (49, 0), (50, 1), (100, 2), (199, 2), (200, 3),
+                    (499, 3), (500, 4), (5000, 4)],
+          'Tiger Status gains a letter at 50, 100, 200 and 500: %r' % steps)
+
+    first = datetime.date(2026, 1, 1)
+    made = [db.backup(folder, keep=3, day=first + datetime.timedelta(days=n))
+            for n in range(5)]
+    check(all(made), 'a copy each new day: %r' % made)
+    check(db.backup(folder, keep=3, day=first + datetime.timedelta(days=4))
+          is None, "a second copy the same day is skipped")
+    left = sorted(os.listdir(folder))
+    check(left == ['tw04-2026-01-03.db', 'tw04-2026-01-04.db',
+                   'tw04-2026-01-05.db'], 'only the newest 3 kept: %r' % left)
+    copy = sqlite3.connect(os.path.join(folder, left[-1]))
+    try:
+        n = copy.execute('SELECT COUNT(*) FROM tourney').fetchone()[0]
+    finally:
+        copy.close()
+    check(n == db.one('SELECT COUNT(*) AS n FROM tourney')['n'],
+          'the copy holds the same rounds')
+
+
 def every_match(db):
     n = 620                              # more than the old cap of 500
     for i in range(n):
@@ -151,12 +180,14 @@ def main():
         db = twdb.DB(os.path.join(d, 'tw04.db'))
         try:
             ties_and_open_days(db)
+            tiger_and_backups(db, os.path.join(d, 'backups'))
             every_match(db)
         finally:
             db.conn.close()
     print('ok: tied scores share places and prize money, an open day has no\n'
           '    winner yet, every match counts towards the totals, and MY\n'
-          '    RESUME carries tournament rounds and money')
+          '    RESUME carries tournament rounds and money, and the daily\n'
+          '    backup keeps the newest copies')
 
 
 if __name__ == '__main__':

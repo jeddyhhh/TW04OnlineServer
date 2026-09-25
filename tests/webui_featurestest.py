@@ -1,5 +1,5 @@
-"""Event pages, head to head, achievements, the activity chart and the admin
-page.
+"""Event pages, head to head, achievements, the activity chart, the admin
+page, handicaps, seasons, what the conditions cost and the comparison.
 
     python tests/webui_featurestest.py
 
@@ -81,6 +81,48 @@ def achievement_rules(today):
     return fails
 
 
+def handicap_rules():
+    """The World Handicap System's short-record table, against par."""
+    def r(n, to_par):
+        return {'persona': 'x', 'when': n, 'to_par': to_par}
+    fails = []
+    if twrecords.handicap([r(1, -5), r(2, -3)], 'x') is not None:
+        fails.append('two rounds are not enough for a handicap')
+    # 3 rounds: the lowest, less 2.  -5 - 2 = -7, a plus 7.
+    if twrecords.handicap([r(1, -5), r(2, -3), r(3, 4)], 'x') != -7.0:
+        fails.append('3 rounds: lowest less 2')
+    # 20+: the best 8 of the last 20 -- the 5 oldest here must not count.
+    rs = [r(n, -30) for n in range(5)] + [r(10 + n, n) for n in range(20)]
+    if twrecords.handicap(rs, 'x') != 3.5:           # mean of 0..7
+        fails.append('20 rounds: best 8 of the last 20, got %r'
+                     % twrecords.handicap(rs, 'x'))
+    if (twrecords.fmt_handicap(-7.0), twrecords.fmt_handicap(3.5)) != (
+            '+7.0', '3.5'):
+        fails.append('plus handicaps are written with a +')
+    if twrecords.strokes_given(-7.0, 3.5) != (True, 10):
+        fails.append('the better player gives the difference')
+    return fails
+
+
+def conditions_rules():
+    """What the conditions cost, on made-up rounds with a known answer: one
+    course, two events, Fast greens two strokes harder than Medium."""
+    class FakeDB(object):
+        def event(self, day):
+            return {'conditions': {'greens': 'Fast' if day == 2 else 'Medium'}}
+
+    def r(day, to_par, course=0):
+        return {'persona': 'x', 'kind': 'tourney', 'day': day,
+                'course': course, 'to_par': to_par, 'when': day}
+    rs = ([r(1, -4), r(1, -4), r(1, -4), r(2, -2), r(2, -2), r(2, -2)]
+          # a course with only one event says nothing, and must not count
+          + [r(3, 10, course=5)] * 3)
+    greens = dict(twrecords.conditions_cost(rs, FakeDB()))['Greens']
+    got = {o: (round(v, 2) if v is not None else None, n) for o, v, n in greens}
+    want = {'Slow': (None, 0), 'Medium': (-1.0, 3), 'Fast': (1.0, 3)}
+    return [] if got == want else ['conditions cost %r, want %r' % (got, want)]
+
+
 def main():
     today = twtourney.today()
     iso = lambda d: twtourney.from_day(d).isoformat()             # noqa: E731
@@ -102,11 +144,11 @@ def main():
         subprocess.Popen(
             [sys.executable, os.path.join(HERE, 'lobbyd.py'), '--host',
              '127.0.0.1', '--port', str(LOBBY), '--db', TEST_DB, '--logfile',
-             '', '--ping', '0', '--buddy-port', '0', '--news', NEWS,
+             '', '--ping', '0', '--backup-keep', '0', '--buddy-port', '0', '--news', NEWS,
              '--no-auto-news'],
             stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT),
     ]
-    fails = achievement_rules(today)
+    fails = achievement_rules(today) + conditions_rules() + handicap_rules()
 
     def check(path, status, *want, absent=(), form=None):
         got, body = request(path, form)
@@ -156,6 +198,23 @@ def main():
               'href="%s/event/%s"' % (BASE, iso(today)),
               'href="%s/event/%s"' % (BASE, iso(today - 1)))
         check('/stats', 200, 'The last 30 days', 'Most players online')
+
+        # -- seasons, comparison, conditions, handicap --------------------------
+        month = twtourney.from_day(today).strftime('%B %Y')
+        check('/tournaments', 200, 'Money list &middot; %s' % month,
+              'href="%s/halloffame"' % BASE)
+        check('/halloffame', 200, 'Hall of Fame', 'This season',
+              'All-time money list', 'href="%s/player/alice"' % BASE)
+        check('/compare?a=alice&b=bob', 200, 'Scoring average',
+              'Career earnings', 'class="num better"',
+              'href="%s/h2h/alice/bob"' % BASE)
+        check('/compare?a=alice&b=nobody', 200, 'nobody has not finished')
+        check('/compare', 200, 'Pick two golfers', '<datalist id="golfers">')
+        check('/player/alice', 200, 'Handicap', 'Compare with',
+              'action="%s/compare"' % BASE)
+        check('/h2h/alice/bob', 200, 'Handicaps:',
+              'href="%s/compare?a=alice&amp;b=bob"' % BASE)
+        check('/courses', 200, 'What the conditions cost', 'Greens')
 
         # -- the admin page ---------------------------------------------------
         check('/admin/wrong', 404, absent=('Account or persona',))
