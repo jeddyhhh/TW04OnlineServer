@@ -1202,6 +1202,40 @@ class DB:
         self.run('DELETE FROM presence')
         self.run('DELETE FROM playing')
 
+    def backup(self, folder, keep=7, day=None):
+        """Today's copy of the database in `folder`, made once a day, keeping
+        the newest `keep`.  Returns the new file's path, or None if today's
+        already exists.
+
+        SQLite's own backup API, from a connection of its own, so it is a
+        consistent snapshot even with the lobby and the site writing -- a
+        file copy of a WAL database can catch it half-written.
+        """
+        day = day or datetime.date.today()
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, 'tw04-%s.db' % day.isoformat())
+        if os.path.exists(path):
+            return None
+        tmp = path + '.part'
+        src = sqlite3.connect(self.path)
+        try:
+            dst = sqlite3.connect(tmp)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+        finally:
+            src.close()
+        os.replace(tmp, path)
+        old = sorted(f for f in os.listdir(folder)
+                     if f.startswith('tw04-') and f.endswith('.db'))
+        for f in old[:-keep] if keep > 0 else []:
+            try:
+                os.remove(os.path.join(folder, f))
+            except OSError:
+                pass
+        return path
+
     def note_online(self, count, day=None):
         """Fold how many are online now into today's peak."""
         day = twtourney.today() if day is None else day

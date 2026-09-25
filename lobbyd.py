@@ -410,6 +410,21 @@ def reprice_calendar():
     return changed
 
 
+def backup_tick():
+    """A copy of the database once a day, in --backup-dir, keeping
+    --backup-keep of them.  Checked hourly, and once at startup, so a server
+    restarted every day still makes its copy."""
+    while True:
+        try:
+            made = DB.backup(ARGS.backup_dir, ARGS.backup_keep)
+            if made:
+                log('***', 'backed up the database to %s' % made)
+        except Exception as exc:                       # noqa: BLE001 - a tick
+            log('!!!', 'database backup failed: %s' % exc)  # must never die
+        if CALENDAR.wait(3600):
+            return
+
+
 def calendar_tick():
     """Roll the calendar forward on the server's clock.
 
@@ -1317,8 +1332,10 @@ class Handler(socketserver.BaseRequestHandler):
                         else min(best, card['strokes']))
 
         career = DB.tourney_career(persona, twtourney.payout)
+        points = self.standing(persona)[1]
         values = {
-            twstats.POINTS: self.standing(persona)[1],
+            twstats.POINTS: points,
+            twstats.TIGER_STATUS: twstats.tiger_status(points),
             twstats.EVENTS_ENTERED: career['entered'],
             twstats.EVENTS_WON: career['won'],
             twstats.TOP10: career['top10'],
@@ -2927,6 +2944,12 @@ def main(argv=None):
                         os.path.dirname(twdb.DEFAULT_DB), 'news.txt'),
                     help='text file shown on the in-game news screen, re-read '
                          'on every request so it can be edited live')
+    ap.add_argument('--backup-dir', default='',
+                    help='where the daily database copies go (default: '
+                         'backups/ beside the database)')
+    ap.add_argument('--backup-keep', type=int, default=7,
+                    help='daily copies to keep (default 7); 0 turns backups '
+                         'off')
     ap.add_argument('--no-auto-news', action='store_true',
                     help='show only the --news text on the news screen, '
                          'without the generated digest (today\'s event, '
@@ -3069,6 +3092,12 @@ def main(argv=None):
     publish_live()
     note('server', 'the master server started up')
     threading.Thread(target=heartbeat, daemon=True).start()
+    if ARGS.backup_keep > 0:
+        ARGS.backup_dir = ARGS.backup_dir or os.path.join(
+            os.path.dirname(DB.path), 'backups')
+        log('***', 'daily database backups in %s, keeping %d'
+            % (ARGS.backup_dir, ARGS.backup_keep))
+        threading.Thread(target=backup_tick, daemon=True).start()
 
     if ARGS.ping > 0:
         log('***', 'keepalive: ~png every %gs (the client drops at 60s idle)'

@@ -12,6 +12,7 @@ name and password go in at `auth`, and the personas this page manages are the
 list the game offers on the SELECT ACCOUNT screen.
 """
 import argparse
+import collections
 import datetime
 import html
 import http.cookies
@@ -273,6 +274,12 @@ tr.payout caption a { float:right; }
          margin:0 .3rem 0 .8rem; vertical-align:-1px; }
 .key i:first-child { margin-left:0; }
 
+/* the comparison: the better of the two figures stands out */
+td.better { color:var(--gold); font-weight:700; }
+.vs { display:flex; gap:.6rem; align-items:flex-end; flex-wrap:wrap; }
+.vs > div { flex:1 1 10rem; }
+.vs button { margin:0; }
+
 /* the admin page */
 textarea { width:100%; min-height:14rem; padding:.6rem .75rem; border-radius:8px;
            border:1px solid var(--line-2); background:#0a1710; color:var(--ink);
@@ -356,6 +363,14 @@ def new_password():
     return ''.join(secrets.choice(alphabet) for _ in range(n))
 
 
+def _golfer_list(rs):
+    """A <datalist> of everyone with a finished round, so the compare boxes
+    suggest names as they are typed -- no script needed."""
+    names = sorted({r['persona'] for r in rs}, key=str.lower)
+    return '<datalist id="golfers">%s</datalist>' % ''.join(
+        '<option value="%s">' % html.escape(n, quote=True) for n in names)
+
+
 def event_href(day):
     """/event/2026-09-24 -- an event's page, by its date."""
     return '/event/%s' % twtourney.from_day(day).isoformat()
@@ -373,6 +388,21 @@ def closes_in(now=None):
                                          datetime.time.min)
     mins = max(1, int((midnight - now).total_seconds() // 60))
     return '%dh %02dm' % divmod(mins, 60) if mins >= 60 else '%dm' % mins
+
+
+def server_tz(now=None):
+    """The server's timezone, which is when the tournament day turns over:
+    'AEST, UTC+10' where the zone has a short name, else just 'UTC+10'.
+    (Windows names zones in full -- 'AUS Eastern Standard Time' -- which is
+    too long to be useful in a heading.)"""
+    t = time.localtime(now)
+    off = t.tm_gmtoff if t.tm_gmtoff is not None else -(
+        time.altzone if t.tm_isdst > 0 else time.timezone)
+    h, m = divmod(abs(off) // 60, 60)
+    utc = 'UTC%s%d%s' % ('+' if off >= 0 else '-', h, ':%02d' % m if m else '')
+    name = time.strftime('%Z', t)
+    return ('%s, %s' % (name, utc)) if name and len(name) <= 5 and \
+        name.isalpha() else utc
 
 
 def prize(purse, place, tied=1):
@@ -422,15 +452,17 @@ def _rounds_table(rs, who=True, course=True):
     """Date, (player,) type, (course,) score, result."""
     if not rs:
         return '<p class="foot" style="margin:0">No rounds yet.</p>'
-    head = ('<th>Date</th>%s<th>Round</th>%s'
-            '<th class="num">Score</th><th>Result</th>'
+    rnd = ' class="hide-sm"' if who else ''
+    head = (('<th>Date</th>%s<th' + rnd + '>Round</th>%s'
+             '<th class="num">Score</th><th>Result</th>')
             % ('<th>Golfer</th>' if who else '',
-               '<th>Course</th>' if course else ''))
+               '<th class="hide-sm">Course</th>' if course else ''))
     rows = ''.join(
-        '<tr><td>%s</td>%s<td>%s</td>%s<td class="num">%s</td>'
-        '<td>%s</td></tr>'
+        ('<tr><td>%s</td>%s<td' + rnd + '>%s</td>%s<td class="num">%s</td>'
+         '<td>%s</td></tr>')
         % (_date(r['when']), '<td>%s</td>' % plink(r['persona']) if who else '',
-           _kind(r), '<td>%s</td>' % clink(r['course']) if course else '',
+           _kind(r),
+           '<td class="hide-sm">%s</td>' % clink(r['course']) if course else '',
            _score(r), _result(r))
         for r in rs)
     return ('<table><thead><tr>%s</tr></thead><tbody>%s</tbody></table>'
@@ -465,7 +497,8 @@ def _prefix_links(text):
 
 NAV = (('/', 'Home'), ('/live', 'Live'), ('/leaderboard', 'Leaderboard'),
        ('/tournaments', 'Tournaments'), ('/stats', 'Stats'),
-       ('/records', 'Records'), ('/courses', 'Courses'))
+       ('/records', 'Records'), ('/courses', 'Courses'),
+       ('/halloffame', 'Hall of Fame'))
 
 # Shown only once there is an account to go to.  Offering it to a visitor who
 # is not signed in would be a link that bounces them straight back here.
@@ -893,6 +926,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 urllib.parse.unquote(path[len('/player/'):]), session)
         if path == '/tournaments':
             return self.reply(self.tournaments(session))
+        if path == '/compare':
+            return self.reply(self.compare_page(
+                (query.get('a') or [''])[0].strip(),
+                (query.get('b') or [''])[0].strip(), session))
+        if path == '/halloffame':
+            return self.reply(self.hall_of_fame(session))
         if path.startswith('/event/'):
             return self.event_page(path[len('/event/'):], session)
         if path.startswith('/h2h/'):
@@ -1134,11 +1173,13 @@ on the console.</p>
             played += ('<p class="foot" style="margin:.6rem 0 0"><a class="pl" '
                        'href="%s">Full leaderboard</a></p>' % event_href(day))
         return ('<div class="card"><h2>Today&rsquo;s event &middot; '
-                '<span style="color:var(--ink)">closes in %s</span></h2>'
+                '<span style="color:var(--ink)">closes in %s</span> '
+                '<span class="foot" style="letter-spacing:0;text-transform:'
+                'none">at midnight %s</span></h2>'
                 '<h1 style="margin:0 0 .2rem">%s</h1>'
                 '<p class="sub" style="margin:0">%s &middot; %s &middot; '
                 '%s</p><p style="margin:.5rem 0 0">%s</p>%s</div>'
-                % (closes_in(), html.escape(event['name']),
+                % (closes_in(), server_tz(), html.escape(event['name']),
                    html.escape(twstats.course_name(event['course'])),
                    twtourney.money(event['purse']),
                    twtourney.from_day(day).strftime('%A %d %B %Y'),
@@ -1589,7 +1630,11 @@ and none is distributed here.</p>
             '<p class="foot" style="margin:0">No events scheduled.</p>'))
 
         # --- the season money list -----------------------------------------
-        season = DB.tourney_standings(today - 365, today, twtourney.payout)
+        # The money list is THIS SEASON's -- a calendar month.  Past seasons
+        # and their champions are on the Hall of Fame page.
+        now = twtourney.from_day(today)
+        first, _last = twrecords.month_days(now.year, now.month)
+        season = DB.tourney_standings(first, today, twtourney.payout)
         rows = []
         for n, r in enumerate(season, 1):
             rows.append('<tr><td class="rank%s">%d</td>'
@@ -1599,12 +1644,17 @@ and none is distributed here.</p>
                         % (' rank-1' if n == 1 else '', n, plink(r['name']),
                            twtourney.money(r['earned']), r['rounds'], r['wins'],
                            _ordinal(r['best']) if r['best'] else '&ndash;'))
-        cards.append('<h2>Money list</h2>' + (
+        cards.append('<h2>Money list &middot; %s</h2>'
+                     '<p class="foot" style="margin:-.6rem 0 .8rem">This '
+                     'season runs to the end of the month. <a class="pl" '
+                     'href="/halloffame">Past seasons and champions</a></p>'
+                     % now.strftime('%B %Y') + (
             '<table><thead><tr><th>#</th><th>Golfer</th>'
             '<th class="num">Earnings</th><th class="num">Events</th>'
             '<th class="num">Wins</th><th class="num hide-sm">Best</th></tr></thead>'
             '<tbody>' + ''.join(rows) + '</tbody></table>' if rows else
-            '<p class="foot" style="margin:0">Nobody has played an event yet.</p>'))
+            '<p class="foot" style="margin:0">Nobody has won any money yet '
+            'this season.</p>'))
 
         # --- who won what --------------------------------------------------
         rows = []
@@ -1648,9 +1698,10 @@ and none is distributed here.</p>
         # came straight here for the tournaments should not have to go back to
         # the home page to see what is on right now.
         body = ('<h1>Tournaments</h1><p class="sub">One event a day, the same '
-                'course and conditions for everyone, scored on the server.</p>'
+                'course and conditions for everyone, scored on the server. '
+                'Each day runs midnight to midnight, %s.</p>'
                 '%s%s'
-                % (self.today_card(),
+                % (server_tz(), self.today_card(),
                    ''.join('<div class="card">%s</div>' % c for c in cards)))
         return page('Tournaments', body, signed_in=bool(session))
 
@@ -1694,6 +1745,8 @@ and none is distributed here.</p>
             figs.append(_figure('%.1f' % p['scoring'], 'Scoring average'))
         if p['longest']:
             figs.append(_figure('%d yd' % p['longest'], 'Longest drive'))
+        hcp = twrecords.handicap(rs, name)
+        figs.append(_figure(twrecords.fmt_handicap(hcp), 'Handicap'))
 
         # Where they stand on each stat table, if they qualify for it.
         standing = {}
@@ -1742,6 +1795,12 @@ and none is distributed here.</p>
                 % (html.escape(name),
                    ' <span class="tag playing">online now</span>' if online else '',
                    ' &middot; '.join(sub_bits), ''.join(figs)))
+        body += ('<form method="get" action="/compare" class="vs card">'
+                 '<input type="hidden" name="a" value="%s"><div><label>'
+                 'Compare with</label><input type="text" name="b" '
+                 'list="golfers" required placeholder="another golfer">%s'
+                 '</div><button type="submit">Compare</button></form>'
+                 % (html.escape(name, quote=True), _golfer_list(rs)))
         body += ('<div class="card"><h2>Achievements &middot; %d of %d</h2>'
                  '<div class="ach">%s</div></div>' % (
                      sum(1 for a in achieved if a['when']), len(achieved),
@@ -1844,8 +1903,8 @@ and none is distributed here.</p>
         rs = twrecords.rounds(DB)
         rec, aces = twrecords.records(rs)
         rows = ''.join(
-            '<tr><td>%s</td><td><strong>%s</strong></td><td>%s</td><td>%s</td>'
-            '<td class="num">%s</td></tr>'
+            '<tr><td>%s</td><td><strong>%s</strong></td><td>%s</td>'
+            '<td class="hide-sm">%s</td><td class="num">%s</td></tr>'
             % (html.escape(title), html.escape(show), plink(r['persona']),
                clink(r['course']), _date(r['when']))
             for _key, title, r, show in rec if r)
@@ -1853,7 +1912,8 @@ and none is distributed here.</p>
                 'server.  A tie goes to whoever did it first.</p>'
                 '<div class="card"><h2>Server records</h2>%s</div>'
                 % ('<table><thead><tr><th>Record</th><th></th><th>Golfer</th>'
-                   '<th>Course</th><th class="num">Date</th></tr></thead>'
+                   '<th class="hide-sm">Course</th><th class="num">Date</th>'
+                   '</tr></thead>'
                    '<tbody>%s</tbody></table>' % rows if rows else
                    '<p class="foot" style="margin:0">No rounds finished yet.</p>'))
         course_rows = ''.join(
@@ -1905,7 +1965,34 @@ and none is distributed here.</p>
                    '<th>Course record</th></tr></thead><tbody>%s</tbody></table>'
                    % rows if rows else
                    '<p class="foot" style="margin:0">No rounds finished yet.</p>'))
+        body += self.conditions_card(rs)
         return page('Courses', body, signed_in=bool(session))
+
+    def conditions_card(self, rs):
+        """What each tournament setting does to scores, from the rounds
+        themselves -- each round against its own course's average, so a hard
+        course does not make its conditions look hard."""
+        rows = []
+        for label, options in twrecords.conditions_cost(rs, DB):
+            cells = ''.join(
+                '<td class="num">%s<span class="foot"> (%d)</span></td>'
+                % (('<span class="%s">%+.1f</span>'
+                    % ('over' if v > 0.05 else 'under' if v < -0.05 else '', v))
+                   if v is not None else '&ndash;', n)
+                for _o, v, n in options)
+            heads = ''.join('<th class="num">%s</th>' % html.escape(o)
+                            for o, _v, _n in options)
+            rows.append('<tr><th>%s</th>%s</tr><tr><td></td>%s</tr>'
+                        % (html.escape(label), heads, cells))
+        return ('<div class="card"><h2>What the conditions cost</h2>'
+                '<p class="foot" style="margin:-.6rem 0 .8rem">Tournament '
+                'rounds only. Each figure is strokes against the average at '
+                'the same course, so a hard course doesn&rsquo;t make its '
+                'settings look hard: <span class="over">+</span> is harder, '
+                '<span class="under">&minus;</span> easier. Rounds counted in '
+                'brackets; a figure needs %d.</p><table><tbody>%s</tbody>'
+                '</table></div>' % (twrecords.CONDITIONS_MIN_ROUNDS,
+                                    ''.join(rows)))
 
     def course_page(self, index, session):
         try:
@@ -1959,6 +2046,179 @@ and none is distributed here.</p>
                  % _rounds_table(c['recent'], course=False))
         return self.reply(page(c['name'], body, signed_in=bool(session)))
 
+    # -- comparing two golfers, and the seasons -------------------------------
+    def compare_page(self, a, b, session):
+        """/compare?a=..&b=..: two golfers' figures side by side, the better
+        of each pair picked out."""
+        rs = twrecords.rounds(DB)
+        form = ('<form method="get" action="/compare" class="vs card">'
+                '<div><label>Golfer</label><input type="text" name="a" '
+                'value="%s" list="golfers" required></div><div><label>'
+                'and</label><input type="text" name="b" value="%s" '
+                'list="golfers" required></div><button type="submit">'
+                'Compare</button>%s</form>'
+                % (html.escape(a, quote=True), html.escape(b, quote=True),
+                   _golfer_list(rs)))
+        pa = twrecords.player(rs, a) if a else None
+        pb = twrecords.player(rs, b) if b else None
+        if not (pa and pb):
+            missing = [n for n, p in ((a, pa), (b, pb)) if n and not p]
+            note = ('<div class="card"><p class="sub" style="margin:0">%s</p>'
+                    '</div>' % ('%s has not finished a round here.'
+                                % html.escape(missing[0])
+                                if missing else 'Pick two golfers.'))
+            return page('Compare', '<h1>Compare golfers</h1>' + form + note,
+                        signed_in=bool(session))
+        a, b = pa['name'], pb['name']
+        ca = DB.tourney_career(a, twtourney.payout)
+        cb = DB.tourney_career(b, twtourney.payout)
+        ha, hb = twrecords.handicap(rs, a), twrecords.handicap(rs, b)
+        aa = sum(1 for x in twrecords.achievements(rs, a) if x['when'])
+        ab = sum(1 for x in twrecords.achievements(rs, b) if x['when'])
+
+        def best(p):
+            return p['best']['strokes'] if p['best'] else None
+
+        # (label, a, b, shown a, shown b, which is better: 'high' / 'low')
+        def fig(v, how):
+            return twrecords.fmt(v, how) if v is not None else '&ndash;'
+        lines = [
+            ('Rounds', pa['rounds'], pb['rounds'], None, None, 'high'),
+            ('Match record W&ndash;L&ndash;H', pa['won'], pb['won'],
+             '%d&ndash;%d&ndash;%d' % (pa['won'], pa['lost'], pa['tied']),
+             '%d&ndash;%d&ndash;%d' % (pb['won'], pb['lost'], pb['tied']),
+             'high'),
+            ('Tournament wins', pa['tourney_wins'], pb['tourney_wins'],
+             None, None, 'high'),
+            ('Career earnings', ca['earned'], cb['earned'],
+             twtourney.money(ca['earned']), twtourney.money(cb['earned']),
+             'high'),
+            ('Handicap', ha, hb, twrecords.fmt_handicap(ha),
+             twrecords.fmt_handicap(hb), 'low'),
+            ('Scoring average', pa['scoring'], pb['scoring'],
+             fig(pa['scoring'], '%.1f'), fig(pb['scoring'], '%.1f'), 'low'),
+            ('Best round', best(pa), best(pb),
+             _score(pa['best']) if pa['best'] else '&ndash;',
+             _score(pb['best']) if pb['best'] else '&ndash;', 'low'),
+            ('Driving distance', pa['drive_avg'], pb['drive_avg'],
+             fig(pa['drive_avg'], '%.0f yd'), fig(pb['drive_avg'], '%.0f yd'),
+             'high'),
+            ('Driving accuracy', pa['fir_pct'], pb['fir_pct'],
+             fig(pa['fir_pct'], '%.1f%%'), fig(pb['fir_pct'], '%.1f%%'), 'high'),
+            ('Greens in regulation', pa['gir_pct'], pb['gir_pct'],
+             fig(pa['gir_pct'], '%.1f%%'), fig(pb['gir_pct'], '%.1f%%'), 'high'),
+            ('Putts per 18', pa['putts18'], pb['putts18'],
+             fig(pa['putts18'], '%.1f'), fig(pb['putts18'], '%.1f'), 'low'),
+            ('Birdies per 18', pa['birdies18'], pb['birdies18'],
+             fig(pa['birdies18'], '%.2f'), fig(pb['birdies18'], '%.2f'), 'high'),
+            ('Eagles', pa['eagles'], pb['eagles'], None, None, 'high'),
+            ('Holes in one', pa['aces'], pb['aces'], None, None, 'high'),
+            ('Longest drive', pa['longest'], pb['longest'],
+             fig(pa['longest'], '%d yd'), fig(pb['longest'], '%d yd'), 'high'),
+            ('Longest putt holed', pa['longest_putt'], pb['longest_putt'],
+             fig(pa['longest_putt'], '%d ft'), fig(pb['longest_putt'], '%d ft'),
+             'high'),
+            ('Achievements', aa, ab, '%d of 5' % aa, '%d of 5' % ab, 'high'),
+        ]
+        rows = []
+        for label, va, vb, sa, sb, how in lines:
+            wa = wb = False
+            if va is not None and vb is not None and va != vb:
+                wa = (va > vb) if how == 'high' else (va < vb)
+                wb = not wa
+            rows.append('<tr><td>%s</td><td class="num%s">%s</td>'
+                        '<td class="num%s">%s</td></tr>'
+                        % (label, ' better' if wa else '',
+                           sa if sa is not None else va,
+                           ' better' if wb else '',
+                           sb if sb is not None else vb))
+        h = twrecords.head_to_head(rs, a, b)
+        met = ('<p class="foot" style="margin:.8rem 0 0">Against each other: '
+               '<a class="pl" href="%s">%d&ndash;%d&ndash;%d</a></p>'
+               % (h2h_href(a, b), h['W'], h['L'], h['T']) if h else
+               '<p class="foot" style="margin:.8rem 0 0">They have not played '
+               'each other yet.</p>')
+        body = ('<h1>%s <span class="foot" style="font-size:1rem">v</span> %s'
+                '</h1>%s<div class="card"><table><thead><tr><th></th>'
+                '<th class="num">%s</th><th class="num">%s</th></tr></thead>'
+                '<tbody>%s</tbody></table>%s</div>'
+                % (plink(a), plink(b), form, html.escape(a), html.escape(b),
+                   ''.join(rows), met))
+        return page('%s v %s' % (a, b), body, signed_in=bool(session))
+
+    def hall_of_fame(self, session):
+        """Every season -- a calendar month -- with its champions, the one in
+        progress on top, and the all-time money list with season titles."""
+        rs = twrecords.rounds(DB)
+        ss = twrecords.seasons(rs, DB)
+        titles = collections.Counter(s['champion']['name'] for s in ss
+                                     if s['finished'] and s['champion'])
+
+        def month(s):
+            return datetime.date(s['year'], s['month'], 1).strftime('%B %Y')
+
+        def cells(s):
+            c, w, m, lo = s['champion'], s['most_wins'], s['match'], s['low']
+            return ('<td>%s</td><td>%s</td><td class="hide-sm">%s</td>'
+                    '<td class="hide-sm">%s</td>' % (
+                        '%s <span class="foot">%s</span>' % (
+                            plink(c['name']), twtourney.money(c['earned']))
+                        if c else '&ndash;',
+                        '%s <span class="foot">%d</span>' % (
+                            plink(w['name']), w['wins']) if w else '&ndash;',
+                        '%s <span class="foot">%d&ndash;%d&ndash;%d</span>' % (
+                            plink(m['persona']), m['W'], m['L'], m['T'])
+                        if m else '&ndash;',
+                        '%s <span class="foot">%s</span>' % (
+                            plink(lo['persona']), _score(lo)) if lo
+                        else '&ndash;'))
+
+        head = ('<thead><tr><th>Season</th><th>Money champion</th>'
+                '<th>Most wins</th><th class="hide-sm">Match play</th>'
+                '<th class="hide-sm">Low round</th></tr></thead>')
+        now = [s for s in ss if not s['finished']]
+        past = [s for s in ss if s['finished']]
+        cards = []
+        if now:
+            s = now[0]
+            last = twtourney.from_day(s['last'])
+            cards.append(
+                '<div class="card"><h2>This season &middot; %s</h2>'
+                '<p class="foot" style="margin:-.6rem 0 .8rem">Ends %s. Leaders '
+                'so far; today&rsquo;s event counts once it closes.</p>'
+                '<table>%s<tbody><tr><td>so far</td>%s</tr></tbody></table>'
+                '</div>' % (month(s), last.strftime('%A %d %B'), head,
+                            cells(s)))
+        cards.append(
+            '<div class="card"><h2>Past seasons</h2>%s</div>'
+            % ('<table>%s<tbody>%s</tbody></table>' % (head, ''.join(
+                '<tr><td>%s</td>%s</tr>' % (month(s), cells(s)) for s in past))
+               if past else '<p class="foot" style="margin:0">The first season '
+               'is still being played.</p>'))
+        first = DB.one('SELECT MIN(day) AS d FROM tourney')
+        alltime = (DB.tourney_standings(first['d'], twtourney.today(),
+                                        twtourney.payout)
+                   if first and first['d'] is not None else [])
+        rows = ''.join(
+            '<tr><td class="rank%s">%d</td><td><strong>%s</strong></td>'
+            '<td class="num">%s</td><td class="num">%d</td>'
+            '<td class="num">%d</td></tr>'
+            % (' rank-1' if n == 1 else '', n, plink(r['name']),
+               twtourney.money(r['earned']), r['wins'], titles.get(r['name'], 0))
+            for n, r in enumerate([r for r in alltime if r['earned']][:20], 1))
+        cards.append(
+            '<div class="card"><h2>All-time money list</h2>%s</div>'
+            % ('<table><thead><tr><th>#</th><th>Golfer</th>'
+               '<th class="num">Earnings</th><th class="num">Wins</th>'
+               '<th class="num">Titles</th></tr></thead><tbody>%s</tbody>'
+               '</table>' % rows if rows else
+               '<p class="foot" style="margin:0">No prize money won yet.</p>'))
+        body = ('<h1>Hall of Fame</h1><p class="sub">A season is a calendar '
+                'month. Its money champion is whoever earns the most in that '
+                'month&rsquo;s tournaments; a title is a season won.</p>'
+                + ''.join(cards))
+        return page('Hall of Fame', body, signed_in=bool(session))
+
     # -- one event, and two players -----------------------------------------
     def event_page(self, date, session):
         """/event/YYYY-MM-DD: an event's details and its whole field, with
@@ -1980,7 +2240,8 @@ and none is distributed here.</p>
         purse = event['purse'] if event else 0
 
         state = ('<span class="tag playing">in progress &middot; closes in %s'
-                 '</span>' % closes_in() if day == today else
+                 ' (midnight %s)</span>' % (closes_in(), server_tz())
+                 if day == today else
                  '<span class="tag">not played yet</span>' if day > today else
                  '<span class="tag">final</span>')
         nav = '<p class="foot" style="margin:0 0 1rem">%s%s</p>' % (
@@ -2066,18 +2327,33 @@ and none is distributed here.</p>
                '%s won' % html.escape(a) if m['result'] == 'W' else
                '%s won' % html.escape(b) if m['result'] == 'L' else 'Halved')
             for m in h['meetings'][:10])
+        ha, hb = twrecords.handicap(rs, a), twrecords.handicap(rs, b)
+        given = twrecords.strokes_given(ha, hb)
+        net = ('<p class="foot" style="margin:1rem 0 0">Handicaps: %s %s, '
+               '%s %s. %s</p>' % (
+                   html.escape(a), twrecords.fmt_handicap(ha), html.escape(b),
+                   twrecords.fmt_handicap(hb),
+                   'In a net game they play level.' if given and not given[1]
+                   else 'In a net game %s gives %s %d stroke%s a round.' % (
+                       html.escape(a if given[0] else b),
+                       html.escape(b if given[0] else a), given[1],
+                       '' if given[1] == 1 else 's') if given else
+                   'Both need 3 full rounds for a net game.'))
         body = ('<h1>%s <span class="foot" style="font-size:1rem">v</span> %s</h1>'
                 '<p class="sub">%d meeting%s%s &middot; <a class="pl" href="%s">'
-                'see it from %s&rsquo;s side</a></p>'
+                'see it from %s&rsquo;s side</a> &middot; <a class="pl" '
+                'href="/compare?a=%s&amp;b=%s">compare their stats</a></p>'
                 '<div class="card"><h2>Record</h2><div class="figures">%s</div>'
-                '</div><div class="card"><h2>Last meetings</h2><table><thead><tr>'
+                '%s</div><div class="card"><h2>Last meetings</h2><table><thead><tr>'
                 '<th>Date</th><th class="hide-sm">Round</th>'
                 '<th class="hide-sm">Course</th><th class="num">%s</th><th class="num">%s</th><th>Result</th>'
                 '</tr></thead><tbody>%s</tbody></table></div>'
                 % (plink(a), plink(b), len(h['meetings']),
                    '' if len(h['meetings']) == 1 else 's',
                    (' &middot; ' + kinds) if kinds else '', h2h_href(b, a),
-                   html.escape(b), ''.join(figs), html.escape(a),
+                   html.escape(b), urllib.parse.quote(a, safe=''),
+                   urllib.parse.quote(b, safe=''), ''.join(figs), net,
+                   html.escape(a),
                    html.escape(b), rows))
         return self.reply(page('%s v %s' % (a, b), body, signed_in=bool(session)))
 

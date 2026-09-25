@@ -4,10 +4,6 @@ A replacement for EA's long-dead online service for **Tiger Woods PGA Tour 2004*
 on the PlayStation 2, for playing online through the
 [PCSX2](https://pcsx2.net) emulator.
 
-My server is online at https://jeddyh.fyi/TW04Online
-
-Create an account on the website and use it to log into the games Online feature, the in-game account creation does not work.
-
 It brings back the game's whole online menu:
 
 - **Lobby:** accounts and personas, game rooms, chat, and challenges.
@@ -20,10 +16,12 @@ It brings back the game's whole online menu:
 
 Alongside the lobby runs a **web site**. Players create their account and
 download the game patch there. It also shows live server status, leaderboards,
-the tournament calendar with a page for every event, player profiles with
-achievements, head-to-head records, tour stats with a 30-day activity chart,
-records and course pages. A private admin page covers password resets, bans,
-renames and the in-game news.
+the tournament calendar with a page for every event, monthly seasons and a
+Hall of Fame, player profiles with handicaps and achievements, head-to-head
+records, side-by-side comparisons, tour stats with a 30-day activity chart,
+records, and course pages with what each tournament setting costs in strokes.
+A private admin page covers password resets, bans, renames and the in-game
+news.
 
 Both are plain Python with **no dependencies**: no framework, no database
 server, no build step.
@@ -290,6 +288,18 @@ the server adds a digest it writes itself: today's event and leader,
 yesterday's winner, the week's new records, and the busiest player.
 `--no-auto-news` turns the digest off.
 
+### Backups
+
+The lobby copies the database once a day into `data/backups/`, as
+`tw04-YYYY-MM-DD.db`, and keeps the newest 7. It uses SQLite's own backup, so
+the copy is consistent even while players are on. `--backup-keep N` changes
+how many are kept (`0` turns backups off), and `--backup-dir` puts them
+somewhere else, such as another disk.
+
+To restore one, stop both programs, copy the backup over `data/tw04.db`,
+delete `data/tw04.db-wal` and `data/tw04.db-shm` if they exist, and start them
+again.
+
 ### Abuse reports
 
 When a player uses REPORT ABUSE in the game, the report is stored with the
@@ -321,6 +331,8 @@ The most useful ones; `--help` on either program lists them all.
 | `--db PATH` | `data/tw04.db` | the database; must be the same file the web site uses |
 | `--news FILE` | `data/news.txt` | the news screen text |
 | `--no-auto-news` | | the news file only, without the generated digest |
+| `--backup-keep N` | `7` | daily database copies to keep; `0` turns backups off |
+| `--backup-dir DIR` | `data/backups` | where the daily copies go |
 | `--open` | | create an account on first login instead of refusing it (LAN only) |
 | `--logfile FILE` | `logs/lobbyd.log` | the log; `''` for none |
 | `--quiet` | | log to the file only, not the terminal too |
@@ -351,7 +363,8 @@ in `.gitignore`.
 
 | Path | What it is |
 |---|---|
-| `data/tw04.db` | the database: every account and password hash, results, tournaments, buddy lists and reports. **Back this up.** |
+| `data/tw04.db` | the database: every account and password hash, results, tournaments, buddy lists and reports |
+| `data/backups/` | a copy of the database for each of the last 7 days (see [Backups](#backups)) |
 | `data/reports.key` | the secret in the abuse-reports page's address |
 | `data/admin.key` | the secret in the admin page's address |
 | `data/news.txt` | your news text, if you create it |
@@ -376,7 +389,7 @@ python3 tests/lobbyd_reporttest.py    # abuse reports and their private page
 python3 tests/twdb_statstest.py       # scoring real captured rounds
 python3 tests/twdb_tourneytest.py     # ties, open days, and every match counted
 python3 tests/webui_pagestest.py      # player, stats, records and course pages; the news
-python3 tests/webui_featurestest.py   # event, head-to-head and admin pages; achievements
+python3 tests/webui_featurestest.py   # event, h2h, compare, Hall of Fame and admin pages; handicaps
 ```
 
 Most modules also test themselves: `python3 twrecords.py`, `twlog.py`,

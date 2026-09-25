@@ -100,6 +100,18 @@ MATCH_POINTS = 4                                  # "Match Points"
 STROKE_POINTS = 5                                 # "Stroke Points"
 TIGER_STATUS = 6    # ONLINE TIGER STATUS, 3 bits; 6 renders "T-I-G-E-R"
 
+# How 0x002A08B8 draws field 6: 0 "T-", 1 "T-I-", 2 "T-I-G-", 3 "T-I-G-E-", and
+# 4 or more "T-I-G-E-R" (the strings at 0x00312A24..0x00312A48).  EA's rule for
+# climbing it is lost; ours is ONLINE POINTS (Jed, 2026-09-25) -- a letter at
+# each of these.
+TIGER_STEPS = (50, 100, 200, 500)
+TIGER_LABELS = ('T-', 'T-I-', 'T-I-G-', 'T-I-G-E-', 'T-I-G-E-R')
+
+
+def tiger_status(points):
+    """Field 6 for a player on `points` online points: 0 to 4."""
+    return sum(1 for step in TIGER_STEPS if points >= step)
+
 MATCH_WIN, MATCH_LOSS, MATCH_TIE = 7, 8, 9        # MATCH PLAY RECORD (W-L)
 STROKE_WIN, STROKE_LOSS, STROKE_TIE = 10, 11, 12  # STROKE PLAY RECORD (W-L-T)
 STROKE_STREAK = 13                                # STROKE PLAY CURRENT STREAK

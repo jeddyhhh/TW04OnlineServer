@@ -25,6 +25,7 @@ impossible becomes None -- left out of averages and records, never shown as a
 record.  `clean()` holds the limits.
 """
 import collections
+import datetime
 import json
 import textwrap
 import time
@@ -312,6 +313,171 @@ def head_to_head(rs, a, b):
                                 'course': r['course'], 'result': r['result'],
                                 'mine': r, 'theirs': theirs.get(r['auth'])})
     out['meetings'].sort(key=lambda m: -m['when'])
+    return out
+
+
+# ---------------------------------------------------------------------------
+# handicaps
+
+# The World Handicap System's table for a short record: with N differentials,
+# average the lowest `count` and add `adjust`.  Twenty or more uses the best 8
+# of the last 20.  The game has no course or slope ratings, so a round's
+# differential is simply its score against par -- which on this server is
+# usually well under, so most indexes are "plus" handicaps.
+HANDICAP_TABLE = {3: (1, -2.0), 4: (1, -1.0), 5: (1, 0.0), 6: (2, -1.0),
+                  7: (2, 0.0), 8: (2, 0.0), 9: (3, 0.0), 10: (3, 0.0),
+                  11: (3, 0.0), 12: (4, 0.0), 13: (4, 0.0), 14: (4, 0.0),
+                  15: (5, 0.0), 16: (5, 0.0), 17: (6, 0.0), 18: (6, 0.0),
+                  19: (7, 0.0), 20: (8, 0.0)}
+HANDICAP_ROUNDS = 20
+HANDICAP_MIN = 3
+
+
+def handicap(rs, name):
+    """A player's handicap index from their last 20 finished 18-hole rounds,
+    or None with fewer than 3.  Negative is a plus handicap: better than
+    scratch."""
+    diffs = [r['to_par'] for r in sorted(rs, key=lambda r: r['when'])
+             if r['persona'].lower() == name.lower()
+             and r['to_par'] is not None][-HANDICAP_ROUNDS:]
+    if len(diffs) < HANDICAP_MIN:
+        return None
+    count, adjust = HANDICAP_TABLE[len(diffs)]
+    return round(sum(sorted(diffs)[:count]) / float(count) + adjust, 1)
+
+
+def fmt_handicap(h):
+    """Golf's way of writing it: 12.4, or +3.1 for better than scratch."""
+    if h is None:
+        return '&ndash;'
+    return '+%.1f' % -h if h < 0 else '%.1f' % h
+
+
+def strokes_given(ha, hb):
+    """In a net game, how many strokes the better player gives the other:
+    (giver is a, strokes).  a gives when a's index is lower."""
+    if ha is None or hb is None:
+        return None
+    n = int(round(hb - ha))
+    return (n > 0, abs(n))
+
+
+# ---------------------------------------------------------------------------
+# seasons
+
+def month_of(r):
+    """(year, month) a round belongs to: its event's date for a tournament
+    round, the server's date when it was reported otherwise."""
+    if r.get('day') is not None:
+        d = twtourney.from_day(r['day'])
+    else:
+        d = datetime.date.fromtimestamp(r['when'])
+    return d.year, d.month
+
+
+def month_days(year, month):
+    """(first, last) tournament day numbers of a month."""
+    first = datetime.date(year, month, 1)
+    nxt = (datetime.date(year + 1, 1, 1) if month == 12
+           else datetime.date(year, month + 1, 1))
+    return twtourney.to_day(first), twtourney.to_day(nxt) - 1
+
+
+def season(rs, db, year, month, open_day=None):
+    """One month's season: the money list (finished events only, as
+    everywhere), and who won what.  Keys: 'year', 'month', 'first', 'last',
+    'finished', 'money' (tourney_standings rows), 'champion' (the top earner,
+    or None), 'most_wins' (row or None), 'match' ({'persona','W','L','T'} for
+    most head-to-head wins, or None), 'low' (the lowest 18-hole round, any
+    kind, or None) and 'rounds'."""
+    open_day = twtourney.today() if open_day is None else open_day
+    first, last = month_days(year, month)
+    money = db.tourney_standings(first, min(last, open_day), twtourney.payout,
+                                 open_day=open_day)
+    paid = [r for r in money if r['earned'] > 0]
+    winners = sorted((r for r in money if r['wins']),
+                     key=lambda r: (-r['wins'], -r['earned']))
+    mine = [r for r in rs if month_of(r) == (year, month)]
+    h2h = collections.defaultdict(lambda: {'W': 0, 'L': 0, 'T': 0})
+    for r in mine:
+        if r['result']:
+            h2h[r['persona']][r['result']] += 1
+    match = None
+    if h2h:
+        who, t = max(h2h.items(), key=lambda kv: (kv[1]['W'], -kv[1]['L'],
+                                                  kv[1]['T']))
+        if t['W']:
+            match = dict(t, persona=who)
+    full = [r for r in mine if r['to_par'] is not None]
+    return {'year': year, 'month': month, 'first': first, 'last': last,
+            'finished': last < open_day, 'money': money,
+            'champion': paid[0] if paid else None,
+            'most_wins': winners[0] if winners else None,
+            'match': match,
+            'low': min(full, key=lambda r: (r['to_par'], r['when']))
+            if full else None,
+            'rounds': len(mine)}
+
+
+def seasons(rs, db, open_day=None):
+    """Every month from the first round played to now, newest first."""
+    open_day = twtourney.today() if open_day is None else open_day
+    months = {month_of(r) for r in rs}
+    now = twtourney.from_day(open_day)
+    months.add((now.year, now.month))
+    return [season(rs, db, y, m, open_day)
+            for y, m in sorted(months, reverse=True)]
+
+
+# ---------------------------------------------------------------------------
+# what the conditions cost
+
+CONDITIONS_MIN_ROUNDS = 3
+
+
+def conditions_cost(rs, db):
+    """How each tournament setting moves scores: [(setting label, [(option,
+    average strokes against the course's own average, rounds), ...]), ...],
+    easiest option first.
+
+    Measured against the COURSE, not par: Black tees at the hardest course
+    would otherwise look like the tees' fault.  That only means something
+    where a course has hosted two or more EVENTS -- with one, every round is
+    measured against its own event and it all cancels to zero -- so rounds
+    at a course's only event are left out.  An option's figure is None until
+    it has CONDITIONS_MIN_ROUNDS rounds.
+    """
+    tour = [r for r in rs if r['kind'] == 'tourney' and r['to_par'] is not None
+            and r['day'] is not None and r['course'] is not None]
+    by_course = collections.defaultdict(list)
+    days = collections.defaultdict(set)
+    for r in tour:
+        by_course[r['course']].append(r['to_par'])
+        days[r['course']].add(r['day'])
+    events = {}
+    diffs = collections.defaultdict(list)
+    for r in tour:
+        scores = by_course[r['course']]
+        if len(days[r['course']]) < 2:
+            continue
+        if r['day'] not in events:
+            e = db.event(r['day'])
+            events[r['day']] = twtourney.full_conditions(
+                e.get('conditions') if e else None)
+        resid = r['to_par'] - sum(scores) / float(len(scores))
+        for setting, option in events[r['day']].items():
+            diffs[(setting, option)].append(resid)
+    out = []
+    for setting in twtourney.EVENT_SETTINGS:
+        options = sorted(twtourney.PURSE_MULTIPLIERS[setting],
+                         key=lambda o: twtourney.PURSE_MULTIPLIERS[setting][o])
+        rows = []
+        for o in options:
+            got = diffs.get((setting, o), [])
+            rows.append((o, sum(got) / len(got)
+                         if len(got) >= CONDITIONS_MIN_ROUNDS else None,
+                         len(got)))
+        out.append((twtourney.SETTING_LABELS[setting], rows))
     return out
 
 
