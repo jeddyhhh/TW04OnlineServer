@@ -14,9 +14,11 @@ A few things to know before reading:
   You need your own copy of the game to follow along; nothing from it is
   included here.
 - **Code** named here (`lobbyd.py`, `twdb.py`, `twtourney.py` ...) is in this
-  repository.  The analysis helpers mentioned (`ee.py`, `xref.py`, `disfn.py`,
-  `tagscan.py` and so on), the PCSX2 setup scripts and the raw capture logs
-  were part of the development workspace and are **not** included.
+  repository.  The analysis helpers (`xref.py`, `disfn.py`, `tagscan.py` and
+  so on) are in [`analysis/`](../analysis) -- its README explains setup.  The
+  PCSX2 setup scripts, the network probes (`p2pwatch.py`, `udpcheck.py`) and
+  the raw capture logs were part of the development workspace and are **not**
+  included.
 - **Section numbers** are referred to throughout ("see section 57"); GitHub's
   outline button (top right of this file) jumps between them.
 - **Dates** are when a finding was made (2026).
@@ -34,7 +36,7 @@ tiny binary frame. There is no GameSpy anywhere in the image.
 
 **Addressing.** One `PT_LOAD` at vaddr `0x00100000`, file offset `0x100`, so
 `vaddr = file_offset + 0xFFF00`. `$gp = 0x0031EBF0`. String offsets printed by
-`tools/strings.py` are file offsets; everything in this document is a vaddr.
+`analysis/strings.py` are file offsets; everything in this document is a vaddr.
 
 ---
 
@@ -463,9 +465,8 @@ inverse tables at `0x003141B0` / `0x003142B0` accept upper or lower case.
 
 ## 8. Reproducing / extending this
 
-These analysis scripts were part of the development workspace and are not in this
-repository; the table is kept because the rest of the notes refers to them.  Only
-`eacrypt.py` ships here.
+Scripts live in [`../analysis`](../analysis) (they need capstone and pyelftools --
+see its README), apart from `eacrypt.py`, which is part of the server:
 
 | Script | Does |
 |---|---|
@@ -476,9 +477,11 @@ repository; the table is kept because the rest of the notes refers to them.  Onl
 | `names.py <elf>` | function names recovered from debug labels |
 | `disfn.py <elf> <addr> [n]` | disassembly with string annotation |
 | `tagscan.py <elf> <callee> [argc]` | constant args at every call site |
-| `requests_map.py <elf>` | the whole table in section 4 |
+| `requests_map.py <elf>` | the whole table in section 4 (and `docs/lobby-requests.txt`) |
 | `mips.py` | manual decode for the R5900 forms capstone mangles |
 | `eacrypt.py` | the `PASS` cipher; run it directly for a round-trip test |
+
+`analysis/_cache/` holds the pickled xref index; delete it if you change `ee.py`.
 
 Note capstone decodes MIPS32 only, so R5900 `daddu`/`daddiu` (the compiler's
 `move`) show up as `.byte` lines in `disfn.py` output. `tagscan.py` handles them
@@ -2050,7 +2053,7 @@ news NAME=1 -> body=b'COURSE OF THE WEEK: Bethpage Black\nServer maintenance...\
 
 Done from the ELF at
 `SLUS_207.57` (extracted from the disc image) with
-`tools/disfn.py` and `tools/xref.py` -- no emulator, no debugger. That file
+`analysis/disfn.py` and `analysis/xref.py` -- no emulator, no debugger. That file
 should have been found much earlier; everything static in these notes can be
 done from it.
 
