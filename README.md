@@ -4,10 +4,6 @@ A replacement for EA's long-dead online service for **Tiger Woods PGA Tour 2004*
 on the PlayStation 2, for playing online through the
 [PCSX2](https://pcsx2.net) emulator.
 
-My server is online at https://jeddyh.fyi/TW04Online
-
-Create an account on the website and use it to log into the games Online feature, the in-game account creation does not work.
-
 It brings back the game's whole online menu:
 
 - **Lobby:** accounts and personas, game rooms, chat, and challenges.
@@ -32,7 +28,8 @@ server, no build step.
 
 How the game's online protocol was worked out -- every message, field and
 screen, read from the game's executable and a live console -- is written up in
-[docs/PROTOCOL.md](docs/PROTOCOL.md).
+[docs/PROTOCOL.md](docs/PROTOCOL.md), and the scripts used to read the executable are in
+[analysis/](analysis/README.md).
 
 > This is a fan project. It is not affiliated with, endorsed by or connected to
 > Electronic Arts or Sony. No game files, BIOS or disc images are included, and
@@ -133,6 +130,7 @@ The supporting modules, for anyone reading the code:
 | `twlog.py` | the size-capped log both programs write |
 | `tw04.sh` | runs and supervises both on Linux (see below) |
 | `docs/PROTOCOL.md` | the protocol research notes: how everything above was worked out |
+| `analysis/` | the ELF analysis helpers those notes were worked out with (they need `capstone` and `pyelftools`; see [analysis/README.md](analysis/README.md)) |
 
 ## Running it for real
 
