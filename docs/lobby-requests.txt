@@ -1,0 +1,314 @@
+# LobbyAPI requests in SLUS_207.57
+# LobbyApiRequest = 0x002bad78, 43 call sites
+
+Lobby_AcceptChallenge              0x00289c20  verb 'mesg'  -> _AcceptChalCallback
+        send  TEXT='accept'
+        send  PRIV=?
+
+Lobby_AddPersona                   0x00288a50  verb 'cper'  -> _PersonaAddCallback
+        send  PERS=?
+        send  ALTS=? (num)
+
+Lobby_ChangePassword               0x00288da0  verb 'pass'  -> _ChangePasswordCallback
+        send  PASS=?
+        send  CHNG=?
+
+Lobby_CreateRoom                   0x00274fc0  verb 'room'  -> _CreateRoomCallback
+        send  NAME=?
+        send  DESC=?
+        send  PASS=?
+        send  PASS=''
+        send  MAX=? (num)
+
+Lobby_DeletePersona                0x002889a0  verb 'dper'  -> _PersonaDelCallback
+        send  PERS=?
+
+Lobby_EditAccountInfo              0x002887d0  verb 'edit'  -> _EditAccountCallback
+        send  NAME=?
+        send  MAIL=?
+        send  SPAM=?
+        send  PASS=?
+        send  CHNG=?
+
+Lobby_GetBuddyServerAddr           0x00287f60  verb 'news'  -> 0x002873d0
+
+Lobby_GetNews                      0x00287ed0  verb 'news'  -> _NewsCallback
+
+Lobby_JoinRoom                     0x00275500  verb 'move'  -> 0x00273b70
+        send  NAME=?
+        send  PASS=?
+
+Lobby_LeaveRoom                    0x002756f0  verb 'move'  -> _LeaveRoomCallback
+
+Lobby_Login                        0x00288610  verb 'auth'  -> _AuthCallback
+        send  NAME=?
+        send  PASS=?
+        send  MID=?
+        send  TOS=? (num)
+        send  HWFLAG=? (num)
+        send  HWMASK=? (num)
+
+Lobby_PeekRoom                     0x00275600  verb 'peek'  -> 0x00273c40
+        send  NAME=?
+
+Lobby_Register                     0x002881b0  verb 'acct'  -> _RegisterCallback
+        send  NAME=?
+        send  PASS=?
+        send  MAIL=?
+        send  BORN=?
+        send  GEND=?
+        send  MINAGE='17'
+        send  SPAM=?
+        send  ALTS=? (num)
+
+Lobby_Register_ParentalConsent     0x002883c0  verb 'acct'  -> _RegisterCallback
+        send  NAME=?
+        send  PASS=?
+        send  MAIL=?
+        send  PMAIL=?
+        send  BORN=?
+        send  GEND=?
+        send  MINAGE='13'
+        send  SPAM=?
+        send  ALTS=? (num)
+
+Lobby_RetrieveLogin_Email          0x00288c70  verb 'lost'  -> _RetrieveLoginCallback
+        send  MAIL=?
+
+Lobby_SendChallenge                0x00289fa0  verb 'mesg'  -> _ChalDataCallback
+        send  TEXT=?
+        send  PRIV=?
+        send  COUR=? (num)
+        send  GLFR=? (num)
+        send  SHOT=? (num)
+        send  MFLG=? (num)
+        send  CFLG=? (num)
+        send  PTS=? (num)
+        send  RANK=? (num)
+        send  STUS=? (num)
+        send  PNG=? (num)
+        send  WIN=? (num)
+        send  LOSS=? (num)
+        send  TIE=? (num)
+        send  INC=? (num)
+
+Lobby_SendChat                     0x00275210  verb 'mesg'  -> _SendChatCallback
+        send  TEXT=?
+
+Lobby_SendChatToPersona            0x00275300  verb 'mesg'  -> _SendChatCallback
+        send  TEXT=?
+        send  PRIV=?
+
+Lobby_SendTwoPlayerResults         0x0028abc0  verb 'rank'  -> _SendResultsCallback
+        send  REPT=0x3734a0
+        send  AUTH=0x373550
+        send  NAME0=0x3734c0
+        send  NAME1=0x3734e0
+        send  RANK0=? (num)
+        send  RANK1=? (num)
+        send  QUIT0=? (num)
+        send  QUIT1=? (num)
+        send  TYPE0=? (num)
+        send  TYPE1=? (num)
+        send  DONE0=? (num)
+        send  DONE1=? (num)
+        send  SCORE0=? (num)
+        send  SCORE1=? (num)
+        send  CLUB0=? (num)
+        send  CLUB1=? (num)
+        send  STROKES0=? (num)
+        send  STROKES1=? (num)
+        send  PUTTS0=? (num)
+        send  PUTTS1=? (num)
+        send  HOLES0=? (num)
+        send  HOLES1=? (num)
+        send  EAGS0=? (num)
+        send  EAGS1=? (num)
+        send  BIRD0=? (num)
+        send  BIRD1=? (num)
+        send  ACES0=? (num)
+        send  ACES1=? (num)
+        send  GIR0=? (num)
+        send  GIR1=? (num)
+        send  LPUT0=? (num)
+        send  LPUT1=? (num)
+        send  DRVS0=? (num)
+        send  DRVS1=? (num)
+        send  FRWY0=? (num)
+        send  FRWY1=? (num)
+        send  LDRV0=? (num)
+        send  LDRV1=? (num)
+        send  SHTC0=? (num)
+        send  SHTC1=? (num)
+        send  PARS0=? (num)
+        send  PARS1=? (num)
+        send  SBOG0=? (num)
+        send  SBOG1=? (num)
+        send  DBOG0=? (num)
+        send  DBOG1=? (num)
+        send  TBOG0=? (num)
+        send  TBOG1=? (num)
+        send  COMP0=? (num)
+        send  COMP1=? (num)
+
+Lobby_SetPersona                   0x00288b70  verb 'pers'  -> _PersCallback
+        send  PERS=?
+        send  CDEV=?
+
+Tourn_GetNDaysTourneyInfoFromServer 0x002df180  verb 'cusr'  -> _TodaysTourneyCallback
+        send  PERS=?
+        send  CMD='mg5ri'
+        send  START=? (num)
+        send  NUM=? (num)
+
+Tourn_GetNDaysTourneyInfoFromServer 0x002df2d0  verb 'cusr'  -> _TodaysTourneyCallback
+        send  PERS=?
+        send  CMD='qdb@w'
+        send  START=? (num)
+        send  NUM=? (num)
+
+Tourn_GetTodaysDateFromServer      0x002df530  verb 'cusr'  -> _TodaysDateCallback
+        send  PERS=?
+        send  CMD='lts5d'
+
+Tourn_GetTodaysTourneyInfoFromServer 0x002df410  verb 'cusr'  -> _TodaysTourneyCallback
+        send  PERS=?
+        send  CMD='mg5ri'
+        send  START=? (num)
+        send  NUM=? (num)
+
+Tourn_ReportRoundResults           0x002df6f0  verb 'cusr'  -> _RoundResultsCallback
+        send  PERS=?
+        send  CMD='5d0tr'
+        send  DATA=?
+
+_ConnCallback                      0x002874d0  verb 'sele'  -> -
+
+_GetStartPermissionFromServer      0x002de660  verb 'cusr'  -> _TourneyStartCallback
+        send  PERS=?
+        send  CMD='esr2t'
+
+_SendChalMessage                   0x00289af0  verb 'chal'  -> _ChalCallback
+        send  PERS=?
+        send  HOST=? (num)
+
+sub_00275430                       0x00275430  verb 'rept'  -> -
+        send  PERS=?
+        send  PROD='tiger-ps2-2004'
+        send  LANG='en'
+
+sub_00276dd0                       0x00276dd0  verb 'snap'  -> 0x00273d30
+        send  NAME='$'
+        send  INDEX=? (num)
+        send  CHAN=? (num)
+        send  START=? (num)
+        send  RANGE=? (num)
+
+sub_00276f20                       0x00276f20  verb 'snap'  -> 0x00273db0
+        send  FIND=?
+        send  INDEX=? (num)
+        send  CHAN=? (num)
+        send  RANGE=? (num)
+
+sub_00277060                       0x00277060  verb 'onln'  -> 0x002741e0
+        send  PERS=?
+
+sub_00277130                       0x00277130  verb 'cusr'  -> 0x002742b0
+        send  PERS=?
+        send  CMD='myrnk'
+
+sub_00277480                       0x00277480  verb 'cusr'  -> -
+        send  PERS=?
+        send  CMD='whomi'
+
+sub_002775d0                       0x002775d0  verb 'user'  -> 0x00274330
+        send  PERS=?
+
+sub_00286c10                       0x00286c10  verb 'user'  -> 0x00285bd0
+        send  PERS=?
+
+sub_00289d20                       0x00289d20  verb 'mesg'  -> -
+        send  TEXT='decline'
+        send  PRIV=?
+
+sub_00289d20                       0x00289d20  verb 'chal'  -> -
+        send  TEXT='decline'
+        send  PRIV=?
+
+sub_00289e10                       0x00289e10  verb 'mesg'  -> -
+        send  TEXT='busy'
+        send  PRIV=?
+
+sub_00289ec0                       0x00289ec0  verb 'mesg'  -> -
+        send  TEXT='revoke'
+        send  PRIV=?
+
+sub_00289ec0                       0x00289ec0  verb 'chal'  -> -
+        send  TEXT='revoke'
+        send  PRIV=?
+
+sub_0028a920                       0x0028a920  verb 'chal'  -> -
+
+sub_002df630                       0x002df630  verb 'cusr'  -> 0x002de7a0
+        send  PERS=?
+        send  CMD='ufpvt'
+
+
+# functions that parse tags but issue no request (callbacks)
+
+sub_00273150                       0x00273150
+        read  N, T
+sub_00273470                       0x00273470
+        read  FROM, ADDR
+_CreateRoomCallback                0x00273a20
+        read  NAME, COUNT
+sub_00273b70                       0x00273b70
+        read  COUNT
+sub_00273c40                       0x00273c40
+        read  COUNT
+sub_00273d30                       0x00273d30
+        read  RANGE
+sub_002741e0                       0x002741e0
+        read  S, R, P
+sub_002742b0                       0x002742b0
+        read  RNKRS
+sub_00274330                       0x00274330
+        read  CRPIN
+sub_002855e0                       0x002855e0
+        read  SECS, TYPE
+sub_002856c0                       0x002856c0
+        read  TYPE, USER, BODY
+sub_00285bd0                       0x00285bd0
+        read  MESG
+_AuthCallback                      0x00287590
+        read  PERSONAS, MAIL, GEND, BORN, SPAM, CPAT
+_RegisterCallback                  0x002877e0
+        read  OPTS, AGE
+_PersonaAddCallback                0x00287a40
+        read  OPTS
+_PersCallback                      0x00287bb0
+        read  LKEY, EX-GAME
+_ChalCallback                      0x00289470
+        read  MODE
+_SendResultsCallback               0x002896c0
+        read  TITLE, MESG
+sub_002897d0                       0x002897d0
+        read  COUR, GLFR, SHOT, MFLG, CFLG, PTS, RANK, WIN, LOSS, TIE, STUS, PNG, INC
+sub_002bad78                       0x002bad78
+        read  CHAN
+sub_002bb758                       0x002bb758
+        read  PING
+sub_002bb830                       0x002bb830
+        read  DIRECT, ADDR, PORT, SESS, MASK, DOWN, SKEY, NAME, CHAN, MORE, SLOTS, PERS, SELF, HOST, OPPO, P1, P2, P3, P4, AUTH, FROM, SEED, WHEN, F, N, RI, RT, R, RF, I, H, A, T, L, P, Z, S, X, D, LIDENT, LCOUNT, IDENT, COUNT, FLAGS
+sub_002bdb38                       0x002bdb38
+        read  ~~
+sub_002c2410                       0x002c2410
+        read  USER
+sub_002c2548                       0x002c2548
+        read  SHOW, STAT, P
+sub_002c3950                       0x002c3950
+        read  BODY, SUBJ
+sub_002c3a50                       0x002c3a50
+        read  ID, SIZE, USER, GROUP
+_TourneyStartCallback              0x002de160
+        read  TKEY, DATA
