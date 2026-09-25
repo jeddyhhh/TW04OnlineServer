@@ -5338,3 +5338,30 @@ key-to-word switch is at 0x00277220 if another rank line is ever needed, and
   Records hides Course.
 - Test: `webui_featurestest.py` (handicap table, conditions with a known
   answer, and the new pages).
+
+### 2026-09-25: real consoles -- cheat-engine codes (UNTESTED)
+
+Every `.pnach` line is a plain 32-bit write inside the main ELF, so a real
+PS2's cheat engine can apply the same patch as type-2 raw codes
+(`2aaaaaaa vvvvvvvv`). Those engines (PS2rd, OPL's built-in copy, Cheat
+Device) need a game-specific **type-9 master code**: the address of a
+regularly called `jal` and that instruction's word.
+
+The hook comes from the game's CodeBreaker v1-5 master code,
+`FA7A006E 32C1BEF9`. CodeBreaker's v1 encryption is published (cb2util's
+`cb1_decrypt_code`), and it decrypts to `F0100008 001135AF`: the ELF entry
+point `0x00100008`, and a hook at `0x001135AC` (the low bits are flags). The
+ELF holds `jal 0x0011E9A0` there (`0x0C047A68`), so the PS2rd master code is
+**`901135AC 0C047A68`**. As a cross-check, "unlock all courses"
+(`2ADB23FE 24010001`) decrypts to a write at `0x002121F0`, inside the game's
+code.
+
+`make_pnach.writes()` is the single list of writes. `build_cht()` (OPL,
+`SLUS_207.57.cht`) and `build_cheatdevice()` (Cheat Device TXT) wrap it with
+the master code, and a test checks the codes against the `.pnach` write for
+write. The site serves both, per request and for this server, in a
+"Real PS2 · untested" card that asks testers to report on the project's
+GitHub issues. Open questions for a real console: whether the DNAS patch
+holds, whether the cheat engine coexists with the game's networking, and
+whether OPL's SMB (network) loading clashes with the game's own use of the
+adapter.
