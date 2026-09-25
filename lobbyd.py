@@ -1235,6 +1235,20 @@ class Handler(socketserver.BaseRequestHandler):
     # profile screen redraw.  `R` and `P` line up with the ONLINE RANK and
     # ONLINE POINTS lines on that screen; `S` is 128 bytes and unidentified.
     RNKRS_BYTES = 0x90
+    # RNKRS is 36 little-endian words, read by 0x00276CE0(key), which maps a
+    # key to a word with the switch at 0x00277220.  MY RESUME's EARNINGS RANK
+    # line is 0x002A0E08: key 0x1F -> word 10, drawn "%d", or "N/A" when <= 0.
+    # (Found from the ELF on 2026-09-25, after field 38 of `S` was tried and
+    # the line stayed N/A.)  The other 35 words are still unknown -- zeros.
+    RNKRS_EARNINGS_RANK = 10
+
+    def rank_record(self, persona):
+        """RNKRS for `myrnk`: 144 bytes, with what is known filled in."""
+        words = [0] * (self.RNKRS_BYTES // 4)
+        if persona:
+            words[self.RNKRS_EARNINGS_RANK] = DB.tourney_career(
+                persona, twtourney.payout)['rank']
+        return struct.pack('<%dI' % len(words), *words)
 
     def stat_record(self, persona):
         """The packed `S` statistics blob for a persona.
@@ -1279,8 +1293,37 @@ class Handler(socketserver.BaseRequestHandler):
                     best = (mine['strokes'] if best is None
                             else min(best, mine['strokes']))
 
+        # Tournament rounds are golf too: the best round of each day this
+        # persona entered (the `tourney` table), with impossible numbers
+        # thrown out the way the web site's pages throw them out.  Leaving
+        # them out made MY RESUME read all zeros for a player who had only
+        # played tournaments (2026-09-25).
+        for row in DB.query('SELECT fields FROM tourney WHERE persona = ?',
+                            (persona,)):
+            try:
+                card = twrecords.clean(twrecords._from_fields(
+                    json.loads(row['fields'])))
+            except (ValueError, TypeError, KeyError):
+                continue
+            if not card['done'] or card['quit'] or not card['holes']:
+                continue
+            for k in total:
+                total[k] += card[k] or 0
+            longest_drive = max(longest_drive, card['longest'] or 0)
+            longest_putt = max(longest_putt, card['longest_putt'] or 0)
+            if card['strokes']:
+                rounds_played += 1
+                best = (card['strokes'] if best is None
+                        else min(best, card['strokes']))
+
+        career = DB.tourney_career(persona, twtourney.payout)
         values = {
             twstats.POINTS: self.standing(persona)[1],
+            twstats.EVENTS_ENTERED: career['entered'],
+            twstats.EVENTS_WON: career['won'],
+            twstats.TOP10: career['top10'],
+            twstats.TOP25: career['top25'],
+            twstats.TOTAL_EARNINGS: career['earned'] // twstats.EARNINGS_SCALE,
             twstats.HOLES_IN_ONE: total['aces'],
             twstats.TOTAL_EAGLES: total['eagles'],
             twstats.TOTAL_BIRDIES: total['birdies'],
@@ -1740,14 +1783,16 @@ class Handler(socketserver.BaseRequestHandler):
             # and be thrown away.  They are sent from on_snap instead.
             return
         if cmd == 'myrnk':
-            # 144 bytes of ranking record.  The layout is not known yet, so
-            # zeros -- which at least satisfies 0x002BF7F0, where the old
-            # `RNKRS=0` did not: it wants a `$`-prefixed binary field and
-            # returns -1 for anything else.
-            self.send('cusr', ident, {'~~': 'OK', 'CMD': cmd,
-                                      'RNKRS': bytes(self.RNKRS_BYTES)})
-            log('***', '    myrnk -> %d zero bytes (layout still unknown)'
-                % self.RNKRS_BYTES)
+            # 144 bytes of ranking record -- see rank_record.  It must be a
+            # `$`-prefixed binary field: 0x002BF7F0 returns -1 for anything
+            # else, which is why the old `RNKRS=0` was refused.
+            who = tags.get('PERS') or self.persona or ''
+            blob = self.rank_record(who)
+            self.send('cusr', ident, {'~~': 'OK', 'CMD': cmd, 'RNKRS': blob})
+            log('***', '    myrnk -> earnings rank %d for %s'
+                % (struct.unpack_from('<I', blob,
+                                      4 * self.RNKRS_EARNINGS_RANK)[0],
+                   who or '?'))
             return
         if cmd == 'whomi' and 'CRPIN' in tags:
             blob = tags['CRPIN']

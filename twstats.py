@@ -155,6 +155,16 @@ EVENTS_WON = 27
 TOP10 = 28
 TOP25 = 29
 
+# TOTAL EARNINGS is field 50, in HUNDREDS of dollars -- confirmed on a console
+# 2026-09-25: 7560 drew "$756,000".  The first probe drew "$5,000" for it, which
+# had been booked as field 5 holding 5 in thousands; 5 is Stroke Points and is
+# never read there.  0x002A0DE8 reads 50 and hands it to the money formatter.
+TOTAL_EARNINGS = 50
+EARNINGS_SCALE = 100                              # dollars per unit
+# EARNINGS RANK is NOT in this record.  0x002A0E08 draws it from word 10 of
+# `cusr myrnk`'s RNKRS (lobbyd.rank_record).  Field 38 is read by the resume
+# renderer too, but what it feeds is still unknown.
+
 HOLES_IN_ONE = 32
 LONGEST_PUTT = 34
 LONGEST_DRIVE = 37
@@ -171,6 +181,7 @@ NAMED = {
     STROKE_INC: 'STROKE INC', MATCH_INC: 'MATCH INC',
     STROKE_DONE: 'STROKE DONE', MATCH_DONE: 'MATCH DONE',
     EVENTS_ENTERED: 'EVENTS ENTERED', EVENTS_WON: 'EVENTS WON',
+    TOTAL_EARNINGS: 'TOTAL EARNINGS /100',
     TOP10: 'TOP 10', TOP25: 'TOP 25',
     TOTAL_EAGLES: 'TOTAL EAGLES', TOTAL_BIRDIES: 'TOTAL BIRDIES',
     TOTAL_GIR: 'TOTAL GIR', GIR_PERCENT: 'GIR %',

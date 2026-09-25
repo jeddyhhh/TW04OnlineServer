@@ -1058,17 +1058,42 @@ class DB:
                 place, tied = row['place'], row['tied']
                 e = table.setdefault(row['name'], {
                     'name': row['name'], 'rounds': 0, 'earned': 0,
-                    'wins': 0, 'best': None, 'strokes': 0})
+                    'wins': 0, 'best': None, 'strokes': 0,
+                    'top10': 0, 'top25': 0})
                 e['rounds'] += 1
                 e['strokes'] += row['strokes']
                 if day < open_day:
                     e['wins'] += (place == 1)
+                    e['top10'] += (place <= 10)
+                    e['top25'] += (place <= 25)
                     e['best'] = (place if e['best'] is None
                                  else min(e['best'], place))
                 if payout and day < open_day:
                     e['earned'] += sum(payout(purse, p) for p in
                                        range(place, place + tied)) // tied
         return sorted(table.values(), key=lambda r: (-r['earned'], r['strokes']))
+
+    def tourney_career(self, persona, payout, open_day=None):
+        """A persona's whole tournament record, for MY RESUME: every event
+        ever held, not the season.  {'entered', 'won', 'top10', 'top25',
+        'earned', 'rank'}, where `rank` is their place on the all-time money
+        list (0 with no earnings -- the screen draws that as N/A).  As on the
+        money list, today's event counts as entered but pays nothing yet."""
+        row = self.one('SELECT MIN(day) AS first FROM tourney')
+        out = {'entered': 0, 'won': 0, 'top10': 0, 'top25': 0, 'earned': 0,
+               'rank': 0}
+        if not row or row['first'] is None:
+            return out
+        open_day = twtourney.today() if open_day is None else open_day
+        table = self.tourney_standings(row['first'], open_day, payout,
+                                       open_day=open_day)
+        for n, r in enumerate(table, 1):              # richest first
+            if r['name'].lower() == persona.lower():
+                out.update(entered=r['rounds'], won=r['wins'],
+                           top10=r['top10'], top25=r['top25'],
+                           earned=r['earned'],
+                           rank=n if r['earned'] > 0 else 0)
+        return out
 
     def tourney_recent(self, limit=20, open_day=None):
         """The most recent FINISHED events, newest first, with their winner.
