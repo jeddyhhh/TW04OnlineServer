@@ -12,6 +12,9 @@ Three rules, each of which the site once got wrong:
    winners lists until the day is over.
 3. **Every match counts.**  The Server Stats totals and a player's record used
    to read only the newest few hundred matches, so both stopped growing.
+4. **MY RESUME carries the tournaments.**  The console's stats record used to
+   be built from head-to-head matches alone, so a tournament player's resume
+   read all zeros.
 """
 import os
 import sys
@@ -21,6 +24,7 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))    # the repo
 sys.path.insert(0, HERE)
 import twdb
 import twrecords
+import twstats
 import twtourney
 
 TODAY = twtourney.today()
@@ -82,6 +86,40 @@ def ties_and_open_days(db):
     check(sorted(wins) == ['alice', 'bob'],
           'player pages count co-winners and not today: %r' % sorted(wins))
 
+    # MY RESUME, as the console gets it.
+    c = db.tourney_career('alice', twtourney.payout)
+    check((c['entered'], c['won'], c['top10'], c['top25'], c['earned']) ==
+          (1, 1, 1, 1, split) and c['rank'] in (1, 2),
+          "alice's career: %r" % c)
+    c = db.tourney_career('dave', twtourney.payout)
+    check((c['entered'], c['won'], c['earned'], c['rank']) == (1, 0, 0, 0),
+          "today's entrant has entered, and no more: %r" % c)
+    import lobbyd
+
+    class Stub(object):
+        standing = lobbyd.Handler.standing
+        stat_record = lobbyd.Handler.stat_record
+    lobbyd.DB = db
+    lobbyd.ARGS = type('A', (), {'probe_stats': False})()
+    row = twstats.unpack(Stub().stat_record('carol')[:-1])
+    want = {twstats.EVENTS_ENTERED: 1, twstats.EVENTS_WON: 0,
+            twstats.TOP10: 1, twstats.TOP25: 1,
+            twstats.TOTAL_EARNINGS: twtourney.payout(PURSE, 3)
+            // twstats.EARNINGS_SCALE,
+            twstats.BEST_ROUND: 65, twstats.SCORING_AVERAGE: 65}
+    got = {k: row[k] for k in want}
+    check(got == want, "carol's resume, tournament rounds only: %r, want %r"
+          % (got, want))
+    # EARNINGS RANK comes from `myrnk`: word 10 of RNKRS.  carol is 3rd.
+    import struct
+    Stub.rank_record = lobbyd.Handler.rank_record
+    Stub.RNKRS_BYTES = lobbyd.Handler.RNKRS_BYTES
+    Stub.RNKRS_EARNINGS_RANK = lobbyd.Handler.RNKRS_EARNINGS_RANK
+    blob = Stub().rank_record('carol')
+    words = struct.unpack('<36I', blob)
+    check(len(blob) == 144 and words[10] == 3 and sum(words) == 3,
+          "carol's RNKRS should hold rank 3 in word 10 only: %r" % (words,))
+
 
 def every_match(db):
     n = 620                              # more than the old cap of 500
@@ -117,7 +155,8 @@ def main():
         finally:
             db.conn.close()
     print('ok: tied scores share places and prize money, an open day has no\n'
-          '    winner yet, and every match counts towards the totals')
+          '    winner yet, every match counts towards the totals, and MY\n'
+          '    RESUME carries tournament rounds and money')
 
 
 if __name__ == '__main__':

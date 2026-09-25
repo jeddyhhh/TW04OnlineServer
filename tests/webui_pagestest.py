@@ -109,7 +109,8 @@ def main():
                                    'PUTTS': 32, 'GIR': 9, 'FRWY': 7, 'DRVS': 14,
                                    'LDRV': 280, 'LPUT': 12, 'DONE': 1})
     with open(NEWS, 'w', encoding='utf-8') as f:
-        f.write('Server maintenance on Friday.\n')
+        f.write('Server maintenance on Friday.\n\nThis line is deliberately '
+                'long, wide enough to run off the side of the news box.\n')
 
     procs = [
         subprocess.Popen(
@@ -178,8 +179,10 @@ def main():
                 fails.append('the news screen should say %r' % want)
         if text.find('Server maintenance') > text.find('TODAY:'):
             fails.append("the operator's text goes before the digest")
-        if any(len(line) > 63 for line in text.splitlines()):
-            fails.append('a news line is wider than the 64-column screen')
+        if any(len(line) > twrecords.NEWS_WIDTH for line in text.splitlines()):
+            fails.append('a news line is wider than the screen')
+        if 'wide enough to run off the side' not in ' '.join(text.split()):
+            fails.append("the operator's long line should wrap, not vanish")
     finally:
         for p in procs:
             p.terminate()
