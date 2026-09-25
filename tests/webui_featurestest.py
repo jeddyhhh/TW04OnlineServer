@@ -104,6 +104,27 @@ def handicap_rules():
     return fails
 
 
+def real_ps2_rules():
+    """The cheat-engine codes are the .pnach, write for write, behind the
+    master code -- for the default port and a moved one."""
+    import re
+    import make_pnach
+    fails = []
+    for port in (10200, 10300):
+        pnach = [(int(a, 16), int(v, 16)) for a, v in re.findall(
+            r'^patch=1,EE,([0-9A-F]{8}),word,([0-9A-F]{8})',
+            make_pnach.build('203.0.113.10', port), re.M)]
+        codes = [(int(a, 16), int(v, 16)) for a, v in re.findall(
+            r'^([0-9A-F]{8}) ([0-9A-F]{8})$',
+            make_pnach.build_cht('203.0.113.10', port), re.M)]
+        if codes[0] != (0x901135AC, 0x0C047A68):
+            fails.append('the .cht must open with the master code')
+        if [(a & 0x0FFFFFFF, v) for a, v in codes[1:]] != pnach or any(
+                a >> 28 != 2 for a, _v in codes[1:]):
+            fails.append('port %d: the codes are not the .pnach' % port)
+    return fails
+
+
 def conditions_rules():
     """What the conditions cost, on made-up rounds with a known answer: one
     course, two events, Fast greens two strokes harder than Medium."""
@@ -148,7 +169,8 @@ def main():
              '--no-auto-news'],
             stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT),
     ]
-    fails = achievement_rules(today) + conditions_rules() + handicap_rules()
+    fails = (achievement_rules(today) + conditions_rules() + handicap_rules()
+             + real_ps2_rules())
 
     def check(path, status, *want, absent=(), form=None):
         got, body = request(path, form)
@@ -215,6 +237,22 @@ def main():
         check('/h2h/alice/bob', 200, 'Handicaps:',
               'href="%s/compare?a=alice&amp;b=bob"' % BASE)
         check('/courses', 200, 'What the conditions cost', 'Greens')
+
+        # -- real PS2 downloads, and the project link on every page -----------
+        project = 'https://github.com/jeddyhhh/TW04OnlineServer'
+        check('/', 200, 'Real PS2', '100% untested',
+              'href="%s/issues"' % project,
+              'href="%s/SLUS_207.57.cht"' % BASE,
+              'href="%s/TW04-CheatDevice.txt"' % BASE)
+        check('/SLUS_207.57.cht', 200, 'Master Code', '901135AC 0C047A68',
+              'UNTESTED', absent=('<html',))
+        check('/TW04-CheatDevice.txt', 200,
+              '"Tiger Woods PGA Tour 2004 (NTSC-U)"', '901135AC 0C047A68')
+        for path in ('/', '/tournaments', '/halloffame', '/player/alice',
+                     '/nothing-here', '/admin/' + KEY):
+            check(path, 404 if path == '/nothing-here' else 200,
+                  'you can run your own', 'href="%s"' % project,
+                  absent=('href="%s%s' % (BASE, project),))
 
         # -- the admin page ---------------------------------------------------
         check('/admin/wrong', 404, absent=('Account or persona',))
