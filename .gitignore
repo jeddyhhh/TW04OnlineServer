@@ -8,12 +8,24 @@ run/
 *.db-wal
 *.db-shm
 reports.key
+admin.key
+news.txt
 
 # Python
 __pycache__/
 *.py[cod]
 
+# The analysis helpers' index of the game executable (analysis/README.md)
+_cache/
+
 # Game files are never distributed here: bring your own disc image and BIOS.
 *.iso
 *.bin
 *.pnach
+SLUS_*
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
