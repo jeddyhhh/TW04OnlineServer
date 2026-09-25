@@ -618,6 +618,9 @@ def lobby_endpoint(host_header=''):
 # The filename PCSX2 matches against the disc, kept here as well so the route
 # still exists -- and still explains itself -- when the builder is missing.
 PNACH_NAME = 'SLUS-20757_64F9781E.pnach'
+# Where the server's source lives -- in every page's footer, so anyone can run
+# their own, and where real-PS2 testers are asked to report back.
+PROJECT_URL = 'https://github.com/jeddyhhh/TW04OnlineServer'
 
 
 def pnach_name():
@@ -742,11 +745,14 @@ def page(title, body, message=None, kind='err', stats=True, refresh=0,
 <nav>%s</nav></div></header>%s
 <main class="wrap">%s%s</main>
 <footer><div class="wrap">%s
-<p class="foot" style="margin-top:1.4rem">Tiger Woods PGA Tour 2004 is a
+<p class="foot" style="margin-top:1.4rem">This server runs TW04 Online Server,
+which is free and open source &mdash; <strong>you can run your own</strong>:
+<a href="%s">%s</a></p>
+<p class="foot" style="margin-top:.4rem">Tiger Woods PGA Tour 2004 is a
 trademark of its owners. This is a fan-run server and is not affiliated with
 them.</p></div></footer>
 </body></html>""" % (meta, html.escape(title), CSS, nav, strip, banner, body,
-                     board)
+                     board, PROJECT_URL, PROJECT_URL.split('://', 1)[1])
             ).encode('utf-8')
 
 
@@ -907,6 +913,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.reply(body, ctype='text/plain; charset=utf-8',
                               disposition='attachment; filename="%s"'
                                           % pnach_name())
+        if make_pnach is not None and path in (
+                '/' + make_pnach.CHT_NAME, '/' + make_pnach.CHEATDEVICE_NAME):
+            body = self.real_ps2_file(path[1:])
+            if body is None:
+                return self.reply(page(
+                    'Cheat codes', '<div class="card"><h2>Cheat codes</h2>'
+                    '<p class="sub" style="margin:0">This server does not know '
+                    'its own public address, so it cannot build codes that '
+                    'point at itself. The operator needs to start it with '
+                    '<code>--advertise</code>.</p></div>'), status=503)
+            return self.reply(body, ctype='text/plain; charset=utf-8',
+                              disposition='attachment; filename="%s"'
+                                          % path[1:])
         if path == '/live':
             return self.reply(self.live(session))
         if path == '/live.json':
@@ -1092,7 +1111,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                        if who else ''))
             return page('Home',
                         self.today_card() + body + self.connect_card()
-                        + self.disc_card(), note, signed_in=True)
+                        + self.disc_card() + self.real_ps2_card(), note, signed_in=True)
         body = """
 <div class="card">
 <h2>Sign in</h2>
@@ -1143,7 +1162,7 @@ on the console.</p>
        twdb.MIN_PASSWORD, twdb.MAX_PASSWORD, keep('mail'))
         return page('Sign in',
                     self.today_card() + body + self.connect_card()
-                    + self.disc_card(), note)
+                    + self.disc_card() + self.real_ps2_card(), note)
 
     def today_card(self):
         """Today's event, above the fold.  It is the one thing on this site
@@ -1342,6 +1361,63 @@ and none is distributed here.</p>
                     'server\'s web site.'
                     % (ip, port, 'DNAS driver stopped.  ' if strong else '')
         ).encode('utf-8')
+
+    def real_ps2_file(self, name):
+        """The same patch as the .pnach, as codes for a real PS2's cheat
+        engine.  Built per request for this server, like the .pnach."""
+        ip, port = lobby_endpoint(self.headers.get('Host', ''))
+        if not ip:
+            return None
+        build = (make_pnach.build_cht if name == make_pnach.CHT_NAME
+                 else make_pnach.build_cheatdevice)
+        return build(ip, port).encode('utf-8')
+
+    def real_ps2_card(self):
+        """Codes for a real console -- clearly marked as never tried."""
+        if make_pnach is None:
+            return ''
+        return """
+<div class="card">
+<h2>Real PS2 &middot; untested</h2>
+<p class="msg err" style="margin:0 0 1.2rem"><strong>100%% untested.</strong>
+Nobody has tried these on a real console yet. They are the same patch as the
+PCSX2 file above, turned into cheat codes, and they may not work at all. If you
+try them &mdash; working or not &mdash; please report what happened on
+<a href="%s/issues">the project&rsquo;s GitHub page</a>.</p>
+
+<p><a class="dl" href="/%s">Download %s</a> &nbsp;
+<a class="dl" href="/%s">Download %s</a></p>
+
+<h3>What you need</h3>
+<ol class="steps">
+<li>A PS2 that can run homebrew (for example with FreeMcBoot), with a network
+  adapter &mdash; built in on slim models, the official adapter on the older
+  ones.</li>
+<li>The same network setup as above: a network configuration saved on the
+  memory card, a real DNS server in it, and UDP 3658 forwarded to the PS2 for
+  head-to-head matches.</li>
+</ol>
+
+<h3>Open PS2 Loader</h3>
+<ol class="steps">
+<li>Put <code>%s</code> in the <code>CHT</code> folder on the drive your games
+  are on, keeping its name.</li>
+<li>In the game&rsquo;s settings in OPL, turn cheats on and pick
+  <em>Auto select cheats</em>.</li>
+<li>Load the game from USB or an internal hard drive. Loading it over the
+  network (SMB) probably clashes with the game using the network adapter
+  itself.</li>
+</ol>
+
+<h3>Cheat Device</h3>
+<ol class="steps">
+<li>Copy the contents of <code>%s</code> into your Cheat Device cheat list,
+  and turn on both <em>Master Code</em> and <em>TW04 Online</em> before booting
+  the disc.</li>
+</ol>
+</div>""" % (PROJECT_URL, make_pnach.CHT_NAME, make_pnach.CHT_NAME,
+             make_pnach.CHEATDEVICE_NAME, make_pnach.CHEATDEVICE_NAME,
+             make_pnach.CHT_NAME, make_pnach.CHEATDEVICE_NAME)
 
     # -- the live page ------------------------------------------------------
     FEED_WORDS = {

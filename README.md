@@ -4,10 +4,6 @@ A replacement for EA's long-dead online service for **Tiger Woods PGA Tour 2004*
 on the PlayStation 2, for playing online through the
 [PCSX2](https://pcsx2.net) emulator.
 
-My server is online at https://jeddyh.fyi/TW04Online
-
-Create an account on the website and use it to log into the games Online feature, the in-game account creation does not work.
-
 It brings back the game's whole online menu:
 
 - **Lobby:** accounts and personas, game rooms, chat, and challenges.
@@ -78,8 +74,8 @@ directly between the players. It never goes through this server; see
 ## Quick start
 
 ```bash
-git clone <this repository>
-cd <repository folder>
+git clone https://github.com/jeddyhhh/TW04OnlineServer.git
+cd TW04OnlineServer
 
 python3 webui.py --port 8080      # the web site
 python3 lobbyd.py                 # the lobby, on port 10200
@@ -247,6 +243,17 @@ patch file. In short, in PCSX2:
    persona on the SELECT ACCOUNT screen.
 
 The patch never modifies the disc image. Deleting the `.pnach` file undoes it.
+
+### On a real PS2 (untested)
+
+The front page also offers the same patch as cheat codes for a real console's
+cheat engine: `SLUS_207.57.cht` for Open PS2 Loader, and a Cheat Device list.
+`make_pnach.py <ip> --real-ps2` writes both too. They need a PS2 that can run
+homebrew, and a game-specific master code hooks the game (it's built in, taken
+from the game's CodeBreaker master code). **Nobody has tried them on a real
+console yet.** If you do, whether they work or not, please
+[open an issue](https://github.com/jeddyhhh/TW04OnlineServer/issues) with what
+happened.
 It works with **Tiger Woods PGA Tour 2004, USA (NTSC-U), serial `SLUS-20757`,
 CRC `64F9781E`**, and no other release.
 

@@ -2,8 +2,11 @@
 
     python make_pnach.py 192.168.1.50
     python make_pnach.py 192.168.1.50 --port 10200 --out <pcsx2>/cheats
+    python make_pnach.py 192.168.1.50 --real-ps2     # + the cheat-device files
 
-Without --out the patch is written to the current folder.
+Without --out the patch is written to the current folder.  --real-ps2 also
+writes the same patch as codes for a real console's cheat engine (UNTESTED):
+SLUS_207.57.cht for Open PS2 Loader, and TW04-CheatDevice.txt for Cheat Device.
 
 Both patches are memory writes -- the ISO is never touched, and deleting the
 .pnach undoes everything.
@@ -77,6 +80,24 @@ DNAS_DRIVER_NEW = [
 # 0x002E1450 or later, so nothing jumps into what this replaces.
 DNAS_LOAD = 0x002E1468                  # lw $v1, -0x1490($at); superseded
 DNAS_LOAD_NEW = 0x00001821              # addu $v1, $zero, $zero
+
+
+# --- real consoles -----------------------------------------------------------
+#
+# A PS2 cheat engine (PS2rd, Open PS2 Loader's built-in one, Cheat Device) only
+# runs codes once it has hooked the game, and the hook is game-specific: a
+# "9" master code naming a regularly called `jal` and the instruction there.
+# This one comes from the game's CodeBreaker v1-5 master code, FA7A006E
+# 32C1BEF9, which decrypts (CodeBreaker's published v1 scheme) to
+# F0100008 001135AF: the ELF's entry point, and a hook at 0x001135AC -- where
+# the ELF does hold `jal 0x0011E9A0`, 0x0C047A68.  Every other code is a type-2
+# constant 32-bit write of exactly what the .pnach writes.
+#
+# NONE OF THIS HAS BEEN TRIED ON A REAL CONSOLE.
+MASTER_CODE = (0x001135AC, 0x0C047A68)
+CHT_NAME = 'SLUS_207.57.cht'                    # OPL looks for <game ID>.cht
+CHEATDEVICE_NAME = 'TW04-CheatDevice.txt'
+REAL_PS2_TITLE = 'Tiger Woods PGA Tour 2004 (NTSC-U)'
 
 
 def words(text, field):
@@ -196,6 +217,42 @@ def build(ip, port, strong=False, comment=None):
     return '\n'.join(out)
 
 
+def writes(ip, port):
+    """[(address, word)]: every write the default patch makes, in order."""
+    out = []
+    for base in IP_ADDRS:
+        out += [(base + n * 4, w) for n, w in enumerate(words(ip, IP_FIELD))]
+    if port != 10200:
+        for base in PORT_ADDRS:
+            out += [(base + n * 4, w)
+                    for n, w in enumerate(words(str(port), PORT_FIELD))]
+    out.append((DNAS_LOAD, DNAS_LOAD_NEW))
+    out += [(addr, word) for addr, word, _note in DATE_CLAMPS]
+    return out
+
+
+def _codes(ip, port):
+    """The cheat lines: master code, then one type-2 write per patch word."""
+    master = ['Master Code', '9%07X %08X' % MASTER_CODE]
+    online = ['TW04 Online - UNTESTED (lobby %s:%d, DNAS, leaderboard dates)'
+              % (ip, port)]
+    online += ['2%07X %08X' % (addr, word) for addr, word in writes(ip, port)]
+    return master, online
+
+
+def build_cht(ip, port):
+    """Open PS2 Loader's <game ID>.cht (PS2rd format).  Every line that is
+    not 16 hex digits is read as a cheat NAME, so it carries no comments."""
+    master, online = _codes(ip, port)
+    return '\n'.join(master + [''] + online) + '\n'
+
+
+def build_cheatdevice(ip, port):
+    """Cheat Device's TXT database: the game title in quotes, then cheats."""
+    master, online = _codes(ip, port)
+    return '\n'.join(['"%s"' % REAL_PS2_TITLE] + master + [''] + online) + '\n'
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -205,6 +262,9 @@ def main():
                     help='stop the DNAS driver entirely instead of just forcing its result')
     ap.add_argument('--out', default=None,
                     help='PCSX2 cheats directory (default: the current folder)')
+    ap.add_argument('--real-ps2', action='store_true',
+                    help='also write the UNTESTED real-console cheat files '
+                         '(%s, %s)' % (CHT_NAME, CHEATDEVICE_NAME))
     args = ap.parse_args()
 
     try:
@@ -220,6 +280,14 @@ def main():
         f.write(text)
     print(text)
     print('written to %s' % path)
+    if args.real_ps2:
+        for name, body in ((CHT_NAME, build_cht(args.ip, args.port)),
+                           (CHEATDEVICE_NAME,
+                            build_cheatdevice(args.ip, args.port))):
+            extra = os.path.join(outdir, name)
+            with open(extra, 'w', encoding='utf-8', newline='\n') as f:
+                f.write(body)
+            print('written to %s (untested on a real PS2)' % extra)
     if not args.out:
         print('\nCopy it into <PCSX2>/cheats/ and tick Enable Cheats for the game.')
     return 0
