@@ -4,10 +4,6 @@ A replacement for EA's long-dead online service for **Tiger Woods PGA Tour 2004*
 on the PlayStation 2, for playing online through the
 [PCSX2](https://pcsx2.net) emulator.
 
-My server is online at https://jeddyh.fyi/TW04Online
-
-Create an account on the website and use it to log into the games Online feature, the in-game account creation does not work.
-
 It brings back the game's whole online menu:
 
 - **Lobby:** accounts and personas, game rooms, chat, and challenges.
@@ -30,6 +26,10 @@ news.
 Both are plain Python with **no dependencies**: no framework, no database
 server, no build step.
 
+How the game's online protocol was worked out -- every message, field and
+screen, read from the game's executable and a live console -- is written up in
+[docs/PROTOCOL.md](docs/PROTOCOL.md).
+
 > This is a fan project. It is not affiliated with, endorsed by or connected to
 > Electronic Arts or Sony. No game files, BIOS or disc images are included, and
 > none are needed to run the server.
@@ -49,12 +49,15 @@ server, no build step.
 - [Tests](#tests)
 - [Troubleshooting](#troubleshooting)
 - [Known limits](#known-limits)
+- [License](#license)
 
 ---
 
 ## What you need
 
-- **Python 3.8 or newer.** There's nothing to `pip install`.
+- **Python 3.8 or newer.** There's nothing to `pip install`. The SQLite built
+  into Python must be 3.24 or newer, which any Python from the last several
+  years has (`python3 -c "import sqlite3; print(sqlite3.sqlite_version)"`).
 - A machine that players can reach on:
 
 | Port | Protocol | What uses it |
@@ -125,6 +128,7 @@ The supporting modules, for anyone reading the code:
 | `make_pnach.py` | builds the game patch |
 | `twlog.py` | the size-capped log both programs write |
 | `tw04.sh` | runs and supervises both on Linux (see below) |
+| `docs/PROTOCOL.md` | the protocol research notes: how everything above was worked out |
 
 ## Running it for real
 
@@ -414,7 +418,8 @@ Most modules also test themselves: `python3 twrecords.py`, `twlog.py`,
 - **The DNAS screen takes 30 seconds or more.** Set DNS1 in PCSX2 to a real
   resolver (see [How players connect](#how-players-connect)).
 - **What happened to that connection?** `logs/lobbyd.log` records every
-  message both ways. Passwords are always redacted.
+  message both ways, with passwords redacted (unless the lobby was started
+  with `--log-passwords`). Add `-v` for a hex dump of each message too.
 
 ## Known limits
 
@@ -434,3 +439,12 @@ Most modules also test themselves: `python3 twrecords.py`, `twlog.py`,
 - **Only the one disc.** The patch is a list of addresses in one build of the
   game (`SLUS-20757`). Other regions and Tiger Woods PGA Tour 2005 aren't
   supported.
+
+## License
+
+The server code is released under the [MIT License](LICENSE).
+
+Tiger Woods PGA Tour 2004 is a trademark of Electronic Arts; PlayStation and
+DNAS are trademarks of Sony Interactive Entertainment. This project contains no
+code, data or assets from the game, and you need your own legally obtained copy
+to play.

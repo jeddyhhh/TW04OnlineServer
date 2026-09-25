@@ -1,6 +1,6 @@
 """The Online Tournaments wire format -- `OnlineTourn.c`.
 
-    python tools/twtourney.py            # self-test
+    python twtourney.py            # self-test
 
 Tournaments are the one part of the online menu that is NOT a TagField.  The
 replies to `mg5ri` and `qdb@w` are plain ASCII hex, read by `0x002DDBD0`:
@@ -847,7 +847,7 @@ def main():
             fails.append('entry %d lost the day' % i)
         # Nothing still unknown may be set: bytes 4..7 hold the likely
         # "invitation only" flag, which turns on a password prompt.  Bytes
-        # 8..11 are the conditions word (section 63) and may carry ONLY the
+        # 8..11 are the conditions word (CONDITIONS) and may carry ONLY the
         # flags in CONDITIONS -- never one of the three unnamed settings.
         spare = [k for k in range(DATA_BYTES)
                  if k not in (0, 1, 2, 3, DAY_OFFSET, DAY_OFFSET + 1,

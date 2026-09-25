@@ -1,6 +1,6 @@
 """Every round anyone has played, and what can be said about them.
 
-    python tools/twrecords.py            # self-test
+    python twrecords.py            # self-test
 
 Head-to-head matches (`results`, resolved through `twdb.matches`) and
 tournament rounds (`tourney`) are recorded in different shapes by different
@@ -245,7 +245,7 @@ def tourney_wins(rs, open_day=None):
                 and r['day'] is not None and r['day'] < open_day):
             days[r['day']].append(r)
     wins = collections.defaultdict(list)
-    for day, field in days.items():
+    for field in days.values():
         low = min(r['strokes'] for r in field)
         for r in field:
             if r['strokes'] == low:
@@ -573,7 +573,7 @@ def leaders(rs, top=10, min_rounds=MIN_ROUNDS):
     aggs = {name: _agg(mine) for name, mine in by.items()}
     out = []
     for cat in CATEGORIES:
-        key, _title, field, better, _fmt, counted, _note = cat
+        _key, _title, field, better, _fmt, counted, _note = cat
         rows = []
         for name, a in aggs.items():
             if a[field] is None:

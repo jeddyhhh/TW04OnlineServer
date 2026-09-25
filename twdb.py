@@ -4,8 +4,8 @@ One file, no server process, no dependencies.  `lobbyd` and the web front end
 both open it; sqlite's own locking keeps them honest, and WAL mode means a
 reader never blocks the writer.
 
-    python tools/twdb.py --create-account jed --password x
-    python tools/twdb.py --list
+    python twdb.py --create-account alice --password secret1
+    python twdb.py --list
 
 The default path is <project>/data/tw04.db, anchored to this file rather than
 to the working directory, so every tool opens the same one wherever it is run
@@ -913,7 +913,7 @@ class DB:
     def add_tourney(self, persona, day, course, fields, event=''):
         """Record a tournament round.  One per player per day, and it is the
         player's BEST: a replay only replaces the stored round when it took
-        fewer strokes (Jed, 2026-09-24 -- a 55 then a 58 must leave the 55).
+        fewer strokes -- a 55 then a 58 must leave the 55.
         Returns the strokes that now count for the player on that day."""
         par = twtourney.card_par(fields) or 0
         now = time.time()
@@ -1042,8 +1042,8 @@ class DB:
 
         `open_day` (default: today) and after are still being played, so they
         count towards `rounds` but not towards `earned`, `wins` or `best`: no
-        prize is paid until the event is over (Jed, 2026-09-25 -- a player
-        leading today's event must not see its winner's share yet).
+        prize is paid until the event is over -- a player leading today's
+        event must not see its winner's share yet.
         """
         if open_day is None:
             open_day = twtourney.today()

@@ -102,7 +102,7 @@ TIGER_STATUS = 6    # ONLINE TIGER STATUS, 3 bits; 6 renders "T-I-G-E-R"
 
 # How 0x002A08B8 draws field 6: 0 "T-", 1 "T-I-", 2 "T-I-G-", 3 "T-I-G-E-", and
 # 4 or more "T-I-G-E-R" (the strings at 0x00312A24..0x00312A48).  EA's rule for
-# climbing it is lost; ours is ONLINE POINTS (Jed, 2026-09-25) -- a letter at
+# climbing it is lost; ours is ONLINE POINTS -- a letter at
 # each of these.
 TIGER_STEPS = (50, 100, 200, 500)
 TIGER_LABELS = ('T-', 'T-I-', 'T-I-G-', 'T-I-G-E-', 'T-I-G-E-R')
@@ -136,7 +136,8 @@ MATCH_DONE = 20                                   # MATCH PLAY COMPLETES
 
 # ONLINE GAME MODES -> STATISTICS, read straight off the screen under
 # --probe-stats.  None of these six appear anywhere in the code: they are bound
-# by frontend script (section 43), so the screen was the only way to name them.
+# by frontend script, not by the ELF, so the screen was the only way to name
+# them.
 TOTAL_EAGLES = 30
 TOTAL_BIRDIES = 31
 TOTAL_GIR = 33

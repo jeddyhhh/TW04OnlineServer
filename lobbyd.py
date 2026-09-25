@@ -1,16 +1,15 @@
 """The TW04 master server: lobby, rooms, matchmaking and results.
 
-    python tools/lobbyd.py
+    python lobbyd.py
 
 Two consoles can log in, see each other, create and join rooms, chat, challenge
 each other, get handed each other's address for the peer-to-peer game, and
-report the round afterwards.  Accounts live in tools/twdb.py, shared with the
-sign-up site in tools/webui.py.
+report the round afterwards.  Accounts live in twdb.py, shared with the
+sign-up site in webui.py.
 
-It began as a measuring instrument and still logs every frame in both raw and
-decoded form, which is how nearly everything in
-notes/tw04-lobbyapi-wire-format.md was worked out.  Replies that are still
-guesses say so in the handler that sends them.
+It began as a measuring instrument and can still log every frame in both raw
+and decoded form (-v), which is how the protocol was worked out.  Replies that
+are still guesses say so in the handler that sends them.
 
 PASSWORDS ARE NOT LOGGED.  Neither the plaintext nor the ciphertext -- with the
 session key being a fixed constant below, one is as good as the other.
@@ -284,8 +283,8 @@ def peer_address(peer):
         # the host NIC its emulator is bound to.  Confirmed working: the client
         # built "192.168.1.50:3658:3658" at 0x0036D8C0 out of this and went
         # in-game.  Two instances on the SAME host address then collide on UDP
-        # 3658 -- see section 20 -- so they need different adapters, and this
-        # picks each one up automatically.
+        # 3658, the game's fixed peer-to-peer port, so they need different
+        # adapters, and this picks each one up automatically.
         return REACH.get(peer, addr), port
     return addr, port
 
@@ -678,7 +677,7 @@ def room_label(room):
 
 def live_state(persona):
     """(state, detail) for one player: what they are doing, in two words."""
-    for pair, session in SESSIONS.items():
+    for pair in SESSIONS:
         if persona in pair:
             other = next(iter(pair - {persona}), '')
             return 'playing', 'vs %s' % other
@@ -1048,7 +1047,7 @@ class Handler(socketserver.BaseRequestHandler):
     # Only I and N are needed to create an entry; the rest have defaults.
     #
     # This is the fix for the empty room list that makes Lobby_JoinRoom return
-    # -10 ("Invalid name.") -- see section 10 of the wire-format notes.
+    # -10 ("Invalid name.") when it cannot find the room it asked for.
 
     def push_rooms(self):
         for i, room in enumerate(list(ARGS.rooms) + CREATED):
@@ -1269,13 +1268,13 @@ class Handler(socketserver.BaseRequestHandler):
         """The packed `S` statistics blob for a persona.
 
         56 bit-fields, high-bit escaped, terminated with a marker -- see
-        tools/twstats.py.  The index of each one was read straight off the MY
+        twstats.py.  The index of each one was read straight off the MY
         RESUME screen with --probe-stats, so the mapping is observed rather
         than inferred.
 
         Match play and stroke play are told apart by the room the match was
         played in: rooms are named "<type>.<id>.<name>" and the type is
-        literally "Match" or "Stroke" (section 13).
+        literally "Match" or "Stroke" -- the game names its own rooms that way.
 
         EVERY RATIO IS OURS TO WORK OUT.  The client does no arithmetic: under
         --probe-stats "HOLES PER EAGLE" read back 44 and "DRIVING ACCURACY %"
@@ -1441,7 +1440,7 @@ class Handler(socketserver.BaseRequestHandler):
         """
         who = tags.get('PERS') or self.persona or ''
         rank, _points = self.standing(who)
-        played, won, lost, tied = DB.record(who) if who else (0, 0, 0, 0)
+        _played, won, lost, tied = DB.record(who) if who else (0, 0, 0, 0)
         # `R` is the rank and `P` is the PING -- 0x0028A214 and 0x0028A254 feed
         # them to the RANK and PNG tags of the challenge blob.  Online points
         # are not here at all; they are statistic 1 inside `S`.
@@ -1459,7 +1458,7 @@ class Handler(socketserver.BaseRequestHandler):
         # 'lts5d' is answered above -- atoi over the body, and a DAY NUMBER.
         # 'ufpvt' is answered above -- its reply is plain text, not a TagField.
         # 'mg5ri' and 'qdb@w' are answered above -- their replies are hex,
-        # not TagFields.  See tools/twtourney.py.
+        # not TagFields.  See twtourney.py.
         # '5d0tr' is answered above -- its reply is shown to the player as text.
         # _TourneyStartCallback (0x002DE160) reads TKEY and DATA
         # 'esr2t' is answered above -- TKEY is binary and DATA is a hex list.
@@ -1640,7 +1639,7 @@ class Handler(socketserver.BaseRequestHandler):
         """
         who = tags.get('PERS') or self.persona or ''
         try:
-            fields, key, day, course, tail = twtourney.parse_round(
+            fields, key, day, course, _tail = twtourney.parse_round(
                 tags.get('DATA') or '')
         except (ValueError, TypeError) as exc:
             log('!!!', '    5d0tr from %s is unreadable: %s' % (who or '?', exc))
@@ -1997,7 +1996,7 @@ class Handler(socketserver.BaseRequestHandler):
         Three kinds of list share one request.  13, 14 and 32 are fixed -- the
         match board, the stroke board and golfer of the week.  The tournament
         boards are not: their index is worked out from the DATE, off the season
-        start this server itself declared in `ufpvt` (section 45.13), so the
+        start this server itself declared in `ufpvt` (on_cusr), so the
         same arithmetic has to be done here in reverse.
         """
         first = twtourney.today() - self.SEASON_DAYS
@@ -2189,7 +2188,7 @@ class Handler(socketserver.BaseRequestHandler):
         An absent `N` means "remove this user", as on `+rom`.
 
         Two of those were being sent wrongly.  `F` is the same bit-character
-        codec as `+msg` (section 17), so `F=0` did not mean "no flags" -- `'0'`
+        codec as `+msg`'s, so `F=0` did not mean "no flags" -- `'0'`
         is bit 27, `0x08000000` -- and the field is now simply omitted, which
         0x002BF228 reads as zero.  `A` is parsed as an address, so `A=0` was
         not a number either.
@@ -2197,7 +2196,6 @@ class Handler(socketserver.BaseRequestHandler):
         for i, who in enumerate(personas):
             rank, _points = self.standing(who)
             addr, _port = peer_address(who)
-            played, won, lost, tied = DB.record(who)
             self.send('+usr', 0, {
                 'I': str(i),
                 'N': who,
@@ -2269,7 +2267,7 @@ class Handler(socketserver.BaseRequestHandler):
         | `S` | row+0x28, 128 | string | the packed statistics record |
 
         `CHAN` on this frame is ignored -- the channel comes from the preceding
-        `snap` reply (section 39) -- but it is sent anyway because it costs
+        `snap` reply -- but it is sent anyway because it costs
         nothing and makes the log readable.
         """
         for rank, row in rows:
@@ -2417,7 +2415,7 @@ class Handler(socketserver.BaseRequestHandler):
                     % (twstats.course_name(setup.get('COUR')),
                        setup.get('SHOT', '?'), setup.get('MFLG', '?'),
                        setup.get('CFLG', '?')))
-                # CFLG is one-hot per setting (section 33).  Print the
+                # CFLG is one-hot per setting (twstats.cflg_groups).  Print the
                 # decomposition so a run of one-setting-at-a-time challenges
                 # can be read straight off the log.
                 log('   ', '        conditions: %s'
@@ -2581,9 +2579,9 @@ class BuddyHandler(Handler):
     """EA Messenger -- the second server, on `--buddy-port`.
 
     Buddy and block lists (kept in the database), presence, and messages
-    between players.  Section 57 of the wire-format notes has the protocol;
-    the first capture (2026-09-23) confirmed the login, both list requests,
-    `PSET` and `RADD` exactly as read off the ELF.
+    between players.  The protocol was read off the game's ELF; the first
+    capture (2026-09-23) confirmed the login, both list requests, `PSET` and
+    `RADD` exactly as read.
 
     Framing is the lobby's own -- the buddy sender 0x002C2350 calls the lobby
     frame writer 0x002B9478 -- so `handle` and `send` are inherited unchanged.
@@ -2677,7 +2675,7 @@ class BuddyHandler(Handler):
             # The name:password path -- the key string had a ':' in it.  The
             # lobby never produces one, so this means the reading is wrong.
             log('!!!', '    EA Messenger AUTH came with PASS, not LKEY -- the '
-                       'connect call took its name:password path (section 57)')
+                       'connect call took its name:password path')
         key = tags.get('LKEY', '')
         persona = DB.lkey_persona(key)
         if not key:
@@ -2967,7 +2965,7 @@ def main(argv=None):
                          'a lobby restarted without it leaves consoles that '
                          'were using it with blank buddy lists')
     ap.add_argument('--db', default=twdb.DEFAULT_DB,
-                    help='the account database, shared with tools/webui.py.  '
+                    help='the account database, shared with webui.py.  '
                          'The default is beside the project, not beside wherever '
                          'you happen to be standing.')
     ap.add_argument('--open', action='store_true',

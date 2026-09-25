@@ -1,6 +1,6 @@
 """The sign-up site for the TW04 master server.  Standard library only.
 
-    python tools/webui.py --port 8080
+    python webui.py --port 8080
 
 Serves three pages from `http.server`: register, sign in, and a profile page
 where an account's personas and match history live.  No framework, no template
@@ -887,7 +887,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.reply(self.profile(session, note))
         if path == '/' + pnach_name():
             # `?dnas=skip` used to serve the --strong-dnas build.  It hangs the
-            # game on PLEASE WAIT -- see notes section 55 -- so the parameter
+            # game on PLEASE WAIT (make_pnach --strong-dnas) -- so the parameter
             # is now ignored rather than removed, because the old link is in
             # people's history and a working patch is a better answer than a
             # 404.
@@ -964,7 +964,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path is None:
             return self.reply(page('Not found', '<h1>Not found</h1>'), status=404)
         fields = self.form()
-        token, session = self.session()
+        _token, session = self.session()
 
         if path.startswith('/reports/') and path.endswith('/handle'):
             # The key in the path is the credential AND the CSRF token: a
@@ -1490,7 +1490,6 @@ and none is distributed here.</p>
         Strokes per hole rather than total strokes: a Front 9 is nine holes and
         a full round is eighteen, so the totals are not comparable.
         """
-        esc = lambda v: html.escape(str(v or ''), quote=True)       # noqa: E731
         rows = []
         for n, e in enumerate(DB.leaderboard(), 1):
             rows.append(

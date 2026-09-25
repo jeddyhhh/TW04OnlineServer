@@ -170,7 +170,7 @@ def decode(cipher, key):
     return bytes(out if end < 0 else out[:end])
 
 
-# Captured from the real TW04 client, 2026-09-17, against tools/lobbyd.py.
+# Captured from the real TW04 client, 2026-09-17, against lobbyd.py.
 # Key issued in SKEY, password typed at the game's login screen, ciphertext
 # taken off the wire.  If a change to this module breaks this vector, the change
 # is wrong.

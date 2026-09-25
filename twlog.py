@@ -1,6 +1,6 @@
 """One log file per server, capped in size.  Standard library only.
 
-    python tools/twlog.py            # self-test
+    python twlog.py            # self-test
 
 `lobbyd` logs every frame it sends and receives, and nothing ever trimmed
 that: a five-minute two-player session wrote 33 KB, and under `tw04.sh` the
