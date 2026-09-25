@@ -20,6 +20,7 @@ Three rules, each of which the site once got wrong:
 """
 import datetime
 import os
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -176,18 +177,21 @@ def every_match(db):
 
 
 def main():
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
-        db = twdb.DB(os.path.join(d, 'tw04.db'))
-        try:
-            ties_and_open_days(db)
-            tiger_and_backups(db, os.path.join(d, 'backups'))
-            every_match(db)
-        finally:
-            db.conn.close()
-    print('ok: tied scores share places and prize money, an open day has no\n'
-          '    winner yet, every match counts towards the totals, and MY\n'
-          '    RESUME carries tournament rounds and money, and the daily\n'
-          '    backup keeps the newest copies')
+    d = tempfile.mkdtemp()
+    db = twdb.DB(os.path.join(d, 'tw04.db'))
+    try:
+        ties_and_open_days(db)
+        tiger_and_backups(db, os.path.join(d, 'backups'))
+        every_match(db)
+    finally:
+        db.conn.close()
+        # Windows can hold the file a moment after closing; a leftover temp
+        # folder is not worth failing the test over.
+        shutil.rmtree(d, ignore_errors=True)
+    print('ok: ties share places and prize money; an open day has no winner\n'
+          '    yet; every match counts towards the totals; MY RESUME carries\n'
+          '    tournament rounds and money; and the daily backup keeps only\n'
+          '    the newest copies')
 
 
 if __name__ == '__main__':
