@@ -1,0 +1,2 @@
+capstone>=4.0
+pyelftools>=0.27
