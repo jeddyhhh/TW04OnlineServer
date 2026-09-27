@@ -1287,6 +1287,51 @@ class DB:
         ('lkeys', 'persona'), ('reports', 'reporter'), ('reports', 'accused'),
     )
 
+    def delete_account(self, account_id):
+        """Remove an account and everything its personas left behind:
+        tournament rounds, the matches they played (both sides' results --
+        a match with one player deleted is not a match), presence, keys and
+        their lines in the activity feed.  Personas, created golfers and
+        buddy-list entries go with the account by foreign key.  Abuse
+        reports are kept: they are the moderation record.
+
+        Returns {'account', 'personas', 'rounds', 'matches'} for the page."""
+        acct = self.one('SELECT * FROM accounts WHERE id = ?', (account_id,))
+        if not acct:
+            raise Error('no such account')
+        names = self.personas(account_id)
+        out = {'account': acct['name'], 'personas': names, 'rounds': 0,
+               'matches': 0}
+        with self.lock:
+            try:
+                c = self.conn
+                for name in names:
+                    out['rounds'] += c.execute(
+                        'DELETE FROM tourney WHERE persona = ? COLLATE NOCASE',
+                        (name,)).rowcount
+                    auths = [r[0] for r in c.execute(
+                        'SELECT auth FROM sessions WHERE host = ? COLLATE NOCASE'
+                        ' OR guest = ? COLLATE NOCASE', (name, name))]
+                    for auth in auths:
+                        c.execute('DELETE FROM results WHERE auth = ?', (auth,))
+                        c.execute('DELETE FROM sessions WHERE auth = ?', (auth,))
+                    out['matches'] += len(auths)
+                    for table, column in (('tourney_log', 'persona'),
+                                          ('presence', 'persona'),
+                                          ('playing', 'host'),
+                                          ('playing', 'guest'),
+                                          ('lkeys', 'persona'),
+                                          ('activity', 'who')):
+                        c.execute('DELETE FROM %s WHERE %s = ? COLLATE NOCASE'
+                                  % (table, column), (name,))
+                c.execute('DELETE FROM accounts WHERE id = ?', (account_id,))
+                c.commit()
+            except sqlite3.Error:
+                c.rollback()
+                raise
+        self._match_cache = (None, [])
+        return out
+
     def rename_persona(self, old, new):
         """Rename a persona everywhere it is stored.  Returns the new name."""
         row = self.persona(old)

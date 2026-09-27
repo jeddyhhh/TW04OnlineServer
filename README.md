@@ -283,6 +283,9 @@ Find an account by its name or any of its personas, then:
   the lobby stays until they leave.
 - **Rename a persona.** Its results, tournament rounds, buddies and reports
   move with it. The page refuses while that persona is online.
+- **Delete the account.** It removes the account, its personas, and every
+  round and match they played, for good. Type the account name to confirm.
+  Abuse reports about them are kept as the moderation record.
 
 The same page edits the in-game news (see below).
 

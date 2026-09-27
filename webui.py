@@ -292,6 +292,7 @@ textarea { width:100%; min-height:14rem; padding:.6rem .75rem; border-radius:8px
                                     padding:.35rem .6rem; font-size:.9rem; }
 .admin-acct form button { margin:0; padding:.4rem .9rem; font-size:.72rem; }
 .admin-acct form .lbl { font-size:.8rem; color:var(--mute); min-width:8rem; }
+.admin-acct form button.danger { background:#7a3b32; color:#fff; }
 
 .chat { list-style:none; margin:.8rem 0 0; padding:0; font-size:.86rem; }
 .chat li { padding:.3rem 0; border-bottom:1px solid var(--line); display:flex;
@@ -796,6 +797,11 @@ def note_failure(ip):
 
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version = 'tw04-webui'
+
+    def version_string(self):
+        # Just the name.  The default adds "Python/3.x.y", which only helps
+        # someone looking for a known hole in that version.
+        return self.server_version
     protocol_version = 'HTTP/1.1'
 
     def log_message(self, fmt, *args):
@@ -815,6 +821,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header('Content-Type', ctype)
         self.send_header('Content-Length', str(len(body)))
         self.send_header('X-Content-Type-Options', 'nosniff')
+        # Never inside another site's frame -- that is how a page gets a
+        # visitor to click a sign-in or account button they cannot see.
+        self.send_header('X-Frame-Options', 'DENY')
+        self.send_header('Content-Security-Policy', "frame-ancestors 'none'")
+        if SECURE_COOKIE:
+            # A site that marks its cookie Secure is served over HTTPS; tell
+            # browsers to stay on it.  Browsers ignore this over plain HTTP,
+            # so the LAN build (--no-secure-cookie) simply does not send it.
+            self.send_header('Strict-Transport-Security', 'max-age=31536000')
         self.send_header('Referrer-Policy', 'same-origin')
         if cookie is not None:
             self.send_header('Set-Cookie', cookie)
@@ -2319,14 +2334,18 @@ try them &mdash; working or not &mdash; please report what happened on
                  if day == today else
                  '<span class="tag">not played yet</span>' if day > today else
                  '<span class="tag">final</span>')
-        nav = '<p class="foot" style="margin:0 0 1rem">%s%s</p>' % (
-            '<a class="pl" href="%s">&larr; %s</a>' % (
+        # Only to days that had an event -- the first one has no yesterday.
+        links = []
+        if DB.event(day - 1) or DB.tourney_day(day - 1, limit=1):
+            links.append('<a class="pl" href="%s">&larr; %s</a>' % (
                 event_href(day - 1),
-                twtourney.from_day(day - 1).strftime('%d %b')),
-            ' &middot; <a class="pl" href="%s">%s &rarr;</a>' % (
+                twtourney.from_day(day - 1).strftime('%d %b')))
+        if day < today and (DB.event(day + 1) or DB.tourney_day(day + 1, limit=1)):
+            links.append('<a class="pl" href="%s">%s &rarr;</a>' % (
                 event_href(day + 1),
-                twtourney.from_day(day + 1).strftime('%d %b'))
-            if day < today else '')
+                twtourney.from_day(day + 1).strftime('%d %b')))
+        nav = ('<p class="foot" style="margin:0 0 1rem">%s</p>'
+               % ' &middot; '.join(links) if links else '')
         figs = [_figure(twtourney.money(purse) if purse else '&ndash;', 'Purse'),
                 _figure(len(board), 'Entrants')]
         if board:
@@ -2484,6 +2503,35 @@ try them &mdash; working or not &mdash; please report what happened on
                 new = DB.rename_persona(old, fields.get('name', ''))
                 note = 'renamed %s to %s, with all their results' % (old, new)
                 query = query or new
+            elif action == 'delete':
+                acct = DB.one('SELECT * FROM accounts WHERE id = ?',
+                              (int(fields.get('id') or 0),))
+                if not acct:
+                    raise twdb.Error('no such account')
+                if fields.get('confirm', '').strip().lower() != \
+                        acct['name'].lower():
+                    raise twdb.Error('to delete %s, type the account name '
+                                     'exactly' % acct['name'])
+                online = {o['persona'].lower() for o in DB.online()}
+                busy = [p for p in DB.personas(acct['id'])
+                        if p.lower() in online]
+                if busy:
+                    raise twdb.Error('%s is online right now -- delete the '
+                                     'account once they have signed off'
+                                     % ', '.join(busy))
+                gone = DB.delete_account(acct['id'])
+                # Sign the account out of the web site too.
+                with SESSION_LOCK:
+                    for token in [t for t, d in SESSIONS.items()
+                                  if d.get('account') == acct['id']]:
+                        del SESSIONS[token]
+                note = ('deleted %s (%s): %d tournament round%s and %d '
+                        'match%s removed; abuse reports about them are kept'
+                        % (gone['account'], ', '.join(gone['personas']) or
+                           'no personas', gone['rounds'],
+                           '' if gone['rounds'] == 1 else 's', gone['matches'],
+                           '' if gone['matches'] == 1 else 'es'))
+                query = ''
             elif action == 'news':
                 text = fields.get('news', '').replace('\r\n', '\n')
                 if len(text) > NEWS_LIMIT:
@@ -2545,7 +2593,14 @@ try them &mdash; working or not &mdash; please report what happened on
                 '</span><input type="hidden" name="q" value="%s">'
                 '<input type="hidden" name="id" value="%d">'
                 '<input type="hidden" name="ban" value="%s">'
-                '<button class="quiet" type="submit">%s</button></form></div>'
+                '<button class="quiet" type="submit">%s</button></form>'
+                '<form method="post" action="%s/delete"><span class="lbl">'
+                'Delete</span><input type="hidden" name="q" value="%s">'
+                '<input type="hidden" name="id" value="%d">'
+                '<input type="text" name="confirm" autocomplete="off" '
+                'placeholder="type %s to confirm" required>'
+                '<button class="danger" type="submit">Delete account</button>'
+                '</form></div>'
                 % (esc(a['name']), ' <span class="tag bad">banned</span>'
                    if a['disabled'] else '', esc(a['mail']) or 'no email',
                    _date(a['created']),
@@ -2553,7 +2608,8 @@ try them &mdash; working or not &mdash; please report what happened on
                    if a['last_seen'] else 'never signed in',
                    personas, base, esc(query), a['id'], twdb.MAX_PASSWORD,
                    base, esc(query), a['id'], '0' if a['disabled'] else '1',
-                   'Lift ban' if a['disabled'] else 'Ban account'))
+                   'Lift ban' if a['disabled'] else 'Ban account',
+                   base, esc(query), a['id'], esc(a['name'])))
         results = (''.join(accts) if accts else
                    '<p class="foot" style="margin:1rem 0 0">No account or '
                    'persona matches that.</p>' if query.strip() else '')
@@ -2570,7 +2626,9 @@ try them &mdash; working or not &mdash; please report what happened on
                 '<p class="foot" style="margin:.8rem 0 1.2rem">A new password '
                 'must be %d&ndash;%d characters. A ban blocks the whole account, '
                 'all its personas. Renaming carries the persona&rsquo;s results, '
-                'rounds and buddies with it; do it while they are offline.</p>'
+                'rounds and buddies with it; do it while they are offline. '
+                'Deleting removes the account, its personas and everything '
+                'they played, for good &mdash; only abuse reports are kept.</p>'
                 '%s</div>'
                 '<div class="card"><h2>In-game news</h2>'
                 '<form method="post" action="%s/news"><textarea name="news" '
