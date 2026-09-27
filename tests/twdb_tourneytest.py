@@ -176,6 +176,41 @@ def every_match(db):
     check(len(db.matches('finn', limit=3)) == 3, 'limit still limits')
 
 
+def every_round(db):
+    """A replay still counts as golf played -- on the course pages, the
+    player page and MY RESUME -- but only the day's best counts for places
+    and wins."""
+    day = TODAY - 5
+    for who, strokes in (('tess', 60), ('tess', 66), ('tom', 59),
+                         ('tess', 58)):
+        db.add_tourney(who, day, 7, card(strokes))
+    rs = twrecords.rounds(db)
+    course = [c for c in twrecords.courses(rs) if c['course'] == 7][0]
+    check(course['rounds'] == 4, 'the course page counts all 4 rounds played'
+          ' there, replays too: %r' % course['rounds'])
+    check(twrecords.player(rs, 'tess')['tourney_rounds'] == 3,
+          'tess played 3 tournament rounds')
+    tess = [(r['strokes'], r['place'], r['field']) for r in rs
+            if r['persona'] == 'tess']
+    check(tess == [(60, None, None), (66, None, None), (58, 1, 2)],
+          "only tess's best round has a place, in a field of 2: %r" % tess)
+    wins = twrecords.tourney_wins(rs)
+    check(len(wins.get('tess', [])) == 1 and 'tom' not in wins,
+          'tess won the day once; tom did not win')
+    import lobbyd
+
+    class Stub(object):
+        standing = lobbyd.Handler.standing
+        stat_record = lobbyd.Handler.stat_record
+    lobbyd.DB = db
+    lobbyd.ARGS = type('A', (), {'probe_stats': False})()
+    row = twstats.unpack(Stub().stat_record('tess')[:-1])
+    got = (row[twstats.BEST_ROUND], row[twstats.SCORING_AVERAGE],
+           row[twstats.EVENTS_ENTERED], row[twstats.EVENTS_WON])
+    check(got == (58, 61, 1, 1), "tess's resume averages all 3 rounds but "
+          'entered and won one event: %r' % (got,))
+
+
 def main():
     d = tempfile.mkdtemp()
     db = twdb.DB(os.path.join(d, 'tw04.db'))
@@ -183,13 +218,15 @@ def main():
         ties_and_open_days(db)
         tiger_and_backups(db, os.path.join(d, 'backups'))
         every_match(db)
+        every_round(db)
     finally:
         db.conn.close()
         # Windows can hold the file a moment after closing; a leftover temp
         # folder is not worth failing the test over.
         shutil.rmtree(d, ignore_errors=True)
     print('ok: ties share places and prize money; an open day has no winner\n'
-          '    yet; every match counts towards the totals; MY RESUME carries\n'
+          '    yet; every match and every tournament round counts towards the\n'
+          '    totals, but only the day\'s best for places; MY RESUME carries\n'
           '    tournament rounds and money; and the daily backup keeps only\n'
           '    the newest copies')
 
