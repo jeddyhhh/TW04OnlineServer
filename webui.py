@@ -436,6 +436,9 @@ def _result(r):
             else verdict
     if r['place']:
         return '%s of %d' % (_ordinal(r['place']), r['field'])
+    if not r.get('counted', True):
+        return ('<span class="foot" title="A better round that day is the '
+                'one on the tournament board">Not counted</span>')
     return ''
 
 

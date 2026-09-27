@@ -1307,13 +1307,14 @@ class Handler(socketserver.BaseRequestHandler):
                     best = (mine['strokes'] if best is None
                             else min(best, mine['strokes']))
 
-        # Tournament rounds are golf too: the best round of each day this
-        # persona entered (the `tourney` table), with impossible numbers
-        # thrown out the way the web site's pages throw them out.  Leaving
-        # them out made MY RESUME read all zeros for a player who had only
-        # played tournaments (2026-09-25).
-        for row in DB.query('SELECT fields FROM tourney WHERE persona = ?',
-                            (persona,)):
+        # Tournament rounds are golf too: EVERY one this persona played
+        # (`tourney_log` -- replays included, as on the web site; only the
+        # EVENTS lines below go by the best round of each day), with
+        # impossible numbers thrown out the way the web site's pages throw
+        # them out.  Leaving them out made MY RESUME read all zeros for a
+        # player who had only played tournaments (2026-09-25).
+        for row in DB.query('SELECT fields FROM tourney_log WHERE persona = ?'
+                            ' COLLATE NOCASE', (persona,)):
             try:
                 card = twrecords.clean(twrecords._from_fields(
                     json.loads(row['fields'])))

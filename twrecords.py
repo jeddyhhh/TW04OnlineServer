@@ -101,7 +101,9 @@ def rounds(db):
     """Every finished round, oldest first, each a dict with `persona`, `kind`
     ('match', 'stroke' or 'tourney'), `when`, `course`, the stat fields,
     `par` and `to_par` (18-hole rounds only), and for head-to-head rounds
-    `opponent` and `result` ('W', 'L' or 'T')."""
+    `opponent` and `result` ('W', 'L' or 'T').  Tournament rounds are every
+    round played, with `counted` True on each player's best of the day (see
+    counts()) and `place`/`field` set only on that one."""
     out = []
     for m in db.matches(limit=100000):
         setup = m.get('setup') or {}
@@ -126,8 +128,29 @@ def rounds(db):
             r['result'] = ('T' if m['winner'] is None else
                            'W' if m['winner'] == p['name'] else 'L')
             out.append(r)
-    for row in db.query('SELECT persona, day, course, event, fields, received'
-                        ' FROM tourney'):
+    # Tournament rounds: every one played (`tourney_log`), each marked with
+    # whether it is the one that COUNTS -- the player's best of the day, the
+    # row `tourney` keeps.  add_tourney stamps both with the same time, which
+    # is how they are matched.  Reading `tourney` alone showed one round per
+    # player per day, so a course played three times said 1 (2026-09-27).
+    kept = {(row['persona'].lower(), row['day']): row for row in db.query(
+        'SELECT persona, day, course, event, fields, received FROM tourney')}
+    matched, names = set(), {}
+    tourney = []
+    for row in db.query('SELECT persona, day, course, fields, received'
+                        ' FROM tourney_log ORDER BY id'):
+        key = (row['persona'].lower(), row['day'])
+        best = kept.get(key)
+        counted = (best is not None and key not in matched
+                   and best['received'] == row['received'])
+        if counted:
+            matched.add(key)
+        tourney.append((row, best['event'] if best else '', counted))
+    # A kept round with no log entry (it should not happen: the log was
+    # started from `tourney`) still counts.
+    tourney += [(row, row['event'], True) for key, row in kept.items()
+                if key not in matched]
+    for row, event, counted in tourney:
         try:
             f = json.loads(row['fields'])
         except ValueError:
@@ -135,11 +158,14 @@ def rounds(db):
         r = _from_fields(f)
         r.update({'persona': row['persona'], 'kind': 'tourney',
                   'when': row['received'] or 0, 'day': row['day'],
-                  'course': row['course'], 'event': row['event'] or '',
+                  'course': row['course'], 'event': event or '',
+                  'counted': counted,
                   'auth': '', 'opponent': '', 'result': None})
         if not r['event']:
-            listed = db.event(row['day'])
-            r['event'] = listed['name'] if listed else ''
+            if row['day'] not in names:
+                listed = db.event(row['day'])
+                names[row['day']] = listed['name'] if listed else ''
+            r['event'] = names[row['day']]
         out.append(r)
 
     done = [clean(r) for r in out
@@ -162,11 +188,11 @@ def rounds(db):
 
     # A tournament round's finishing place in its day's field, as the
     # tournament board gives it: 1 + everyone who scored better, so a tie
-    # shares a place.
+    # shares a place.  Only the round that counts has one.
     days = collections.defaultdict(list)
     for r in done:
         r['place'] = r['field'] = None
-        if r['kind'] == 'tourney' and r['strokes'] is not None:
+        if counts(r) and r['strokes'] is not None:
             days[r['day']].append(r)
     for field in days.values():
         field.sort(key=lambda r: (r['strokes'], r['when']))
@@ -176,6 +202,14 @@ def rounds(db):
 
     done.sort(key=lambda r: r['when'])
     return done
+
+
+def counts(r):
+    """A tournament round that stands on the tournament board: the player's
+    best of that day.  Their other rounds that day are still golf -- they
+    count as rounds played, in averages and records -- but not for places,
+    wins or money."""
+    return r['kind'] == 'tourney' and r.get('counted', True)
 
 
 def course_name(course):
@@ -241,7 +275,7 @@ def tourney_wins(rs, open_day=None):
         open_day = twtourney.today()
     days = collections.defaultdict(list)
     for r in rs:
-        if (r['kind'] == 'tourney' and r['strokes'] is not None
+        if (counts(r) and r['strokes'] is not None
                 and r['day'] is not None and r['day'] < open_day):
             days[r['day']].append(r)
     wins = collections.defaultdict(list)
@@ -687,7 +721,7 @@ def news(db, now=None, today=None):
                            ', purse %s' % _money(event['purse'])
                            if event['purse'] else ''),
                  twtourney.describe_conditions(event.get('conditions'))]
-        board = [r for r in rs if r['kind'] == 'tourney' and r['day'] == today
+        board = [r for r in rs if counts(r) and r['day'] == today
                  and r['strokes'] is not None]
         if board:
             lead = min(board, key=lambda r: (r['strokes'], r['when']))
@@ -698,7 +732,7 @@ def news(db, now=None, today=None):
             lines.append('Nobody has posted a score yet.')
         sections.append(lines)
 
-    past = [r for r in rs if r['kind'] == 'tourney' and r['day'] == today - 1
+    past = [r for r in rs if counts(r) and r['day'] == today - 1
             and r['strokes'] is not None]
     if past:
         win = min(past, key=lambda r: (r['strokes'], r['when']))
