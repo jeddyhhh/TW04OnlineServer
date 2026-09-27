@@ -199,6 +199,9 @@ def main():
         check('/event/' + iso(today + 3), 200, 'Future Classic',
               'not played yet', absent=('<th>Pos</th>',))
         check('/event/2001-01-01', 404, 'There was no event')
+        # The earliest day with rounds has no yesterday to link to.
+        check('/event/' + iso(today - 2), 200, '%s &rarr;' % twtourney.from_day(
+            today - 1).strftime('%d %b'), absent=('&larr;',))
         check('/event/yesterday', 404, 'not a date')
 
         # -- head to head -----------------------------------------------------
@@ -237,6 +240,18 @@ def main():
         check('/h2h/alice/bob', 200, 'Handicaps:',
               'href="%s/compare?a=alice&amp;b=bob"' % BASE)
         check('/courses', 200, 'What the conditions cost', 'Greens')
+
+        # -- headers: never framed, no version numbers -------------------------
+        with urllib.request.urlopen('http://127.0.0.1:%d%s/' % (WEB, BASE),
+                                    timeout=10) as r:
+            hdr = r.headers
+        if hdr.get('X-Frame-Options') != 'DENY' or \
+                "frame-ancestors 'none'" not in hdr.get('Content-Security-Policy', ''):
+            fails.append('pages must refuse to be framed: %r' % dict(hdr))
+        if hdr.get('Server') != 'tw04-webui':
+            fails.append('the Server header gives away %r' % hdr.get('Server'))
+        if hdr.get('Strict-Transport-Security'):
+            fails.append('no HSTS over plain HTTP (--no-secure-cookie)')
 
         # -- real PS2 downloads, and the project link on every page -----------
         project = 'https://github.com/jeddyhhh/TW04OnlineServer'
@@ -302,6 +317,36 @@ def main():
             saved = f.read()
         if saved != 'Hello from the admin page.\nSecond line.':
             fails.append('the news file holds %r' % saved)
+
+        # Deleting an account takes its rounds and matches with it, and needs
+        # the name typed out.
+        tid = db.create_account('tester', 'secret1', persona='tester')
+        db.add_tourney('tester', today, 4, {'HOLES': 18, 'STROKES': 60,
+                                            'PUTTS': 25, 'DONE': 1})
+        db.add_session('tokT', 'Stroke.T.East', 'alice', 'tester', 2,
+                       setup={'COUR': '4'})
+        db.add_result({'AUTH': 'tokT', 'REPT': 'alice', 'DONE0': '1',
+                       'DONE1': '1', 'HOLES0': '18', 'HOLES1': '18',
+                       'STROKES0': '70', 'STROKES1': '68'})
+        check('/player/tester', 200, 'tester')
+        check('/admin/%s?q=tester' % KEY, 200, 'Delete account',
+              'type tester to confirm')
+        check('/admin/%s/delete' % KEY, 200, 'type the account name',
+              form={'id': tid, 'confirm': 'nope', 'q': 'tester'})
+        check('/admin/%s/delete' % KEY, 200, 'deleted tester',
+              '1 tournament round and 1 match removed',
+              form={'id': tid, 'confirm': 'TESTER', 'q': 'tester'})
+        check('/player/tester', 404)
+        left = db.one("SELECT (SELECT COUNT(*) FROM accounts WHERE name = 'tester')"
+                      " + (SELECT COUNT(*) FROM personas WHERE name = 'tester')"
+                      " + (SELECT COUNT(*) FROM tourney WHERE persona = 'tester')"
+                      " + (SELECT COUNT(*) FROM tourney_log WHERE persona = 'tester')"
+                      " + (SELECT COUNT(*) FROM sessions WHERE auth = 'tokT')"
+                      " + (SELECT COUNT(*) FROM results WHERE auth = 'tokT') AS n")['n']
+        if left:
+            fails.append('%d row(s) of the deleted account were left behind' % left)
+        if not db.one("SELECT 1 FROM tourney WHERE persona = 'alice'"):
+            fails.append("deleting tester must not touch alice's own rounds")
 
         # The console sees it, and the lobby has started today's peak (the
         # news login picks no persona, so the count itself can be 0).
