@@ -140,11 +140,19 @@ body::before { content:""; position:fixed; z-index:-1; pointer-events:none;
 .brand small { display:block; font-size:.68rem; letter-spacing:.2em;
                color:var(--mute); font-weight:700; margin-top:.1rem;
                text-shadow:none; }
-nav { margin-left:auto; display:flex; gap:.25rem; flex-wrap:wrap;
-      font-size:.82rem; font-weight:800; letter-spacing:.04em;
-      text-transform:uppercase; }
-nav a { color:#fff; text-decoration:none; padding:.15rem .75rem;
-        position:relative; }
+/* The menu is a row of its own under the title, starting at the left, on
+   one line always: signed in there are nine links, and a second row of one
+   looked broken.  They fit a desktop header; on a narrower screen the row
+   scrolls sideways instead of wrapping.  The side padding is room for the
+   hover arrows at either end; the negative margins take it back, and the
+   link's own padding, so the first link's text lines up with the title. */
+nav { flex:1 0 100%; display:flex; gap:.25rem; flex-wrap:nowrap;
+      overflow-x:auto; scrollbar-width:none; padding:0 .5rem;
+      margin:0 -.5rem 0 -1.05rem; font-size:.82rem; font-weight:800;
+      letter-spacing:.04em; text-transform:uppercase; }
+nav::-webkit-scrollbar { display:none; }
+nav a { color:#fff; text-decoration:none; padding:.15rem .55rem;
+        position:relative; white-space:nowrap; }
 /* the chosen item: a navy bar with an orange arrow either side */
 nav a:hover { background:var(--navy); }
 nav a:hover::before, nav a:hover::after { content:""; position:absolute;
@@ -310,8 +318,7 @@ a.pl:hover { color:var(--gold-2); border-bottom-color:var(--gold); }
 @media (max-width:560px) { .hide-sm { display:none; } .show-sm { display:block; }
   .card { padding:1.1rem 1rem 1.2rem; }
   .card > h2:first-child { margin:-1.1rem -1rem 1rem; padding:.5rem 1rem; }
-  main > h1 { font-size:1.4rem; }
-  nav { margin-left:0; } }
+  main > h1 { font-size:1.4rem; } }
 .conds { color:var(--mute); font-size:.85rem; }
 /* an event's prize money: hidden under its schedule row until the event's
    name is clicked (a #pay-<day> link), so it needs no script */
