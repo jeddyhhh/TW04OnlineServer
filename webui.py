@@ -255,7 +255,7 @@ td { padding:.5rem .4rem; border-bottom:1px solid var(--line); }
 tbody tr:last-child td { border-bottom:0; }
 tbody tr:hover td { background:rgba(36,42,67,.75); }
 td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
-td.num { white-space:nowrap; }
+td.num, th.num { white-space:nowrap; }
 tr.me td { background:var(--navy); }
 tr.me td:first-child { box-shadow:inset 3px 0 0 var(--gold); }
 .rank { color:var(--mute); font-variant-numeric:tabular-nums; }
