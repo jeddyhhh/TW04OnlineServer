@@ -882,7 +882,7 @@ def page(title, body, message=None, kind='err', stats=True, refresh=0,
     meta = ('<meta http-equiv="refresh" content="%d">' % refresh) if refresh else ''
     return ("""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">%s
-<title>%s</title><style>%s</style></head><body>
+<title>TW04Online - %s</title><style>%s</style></head><body>
 <header class="top"><div class="wrap">
 <p class="brand">Tiger Woods <span>PGA Tour 2004</span><small>Online &mdash; community master server</small></p>
 %s</div></header>%s
@@ -1317,7 +1317,7 @@ on the console.</p>
 </div>
 """ % (twdb.MAX_NAME, keep('account'), twdb.MAX_NAME, keep('persona'),
        twdb.MIN_PASSWORD, twdb.MAX_PASSWORD, keep('mail'))
-        return page('Sign in',
+        return page('Home',
                     self.today_card() + body + self.connect_card()
                     + self.disc_card() + self.real_ps2_card(), note)
 
