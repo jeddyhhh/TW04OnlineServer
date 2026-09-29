@@ -162,6 +162,54 @@ nav a:hover::before { left:-.5rem; border-left:.5rem solid var(--gold);
 nav a:hover::after { right:-.5rem; border-right:.5rem solid var(--gold);
   border-left-width:0; }
 
+/* On a phone the row gives way to a MENU button that drops the links down
+   over the page, one to a line: the navy bar and orange arrow mark the one
+   under your finger, as on the console.  Below 900px, where the row would
+   otherwise have to scroll. */
+.top { position:relative; }
+.menu { display:none; }
+.menu summary { list-style:none; cursor:pointer; display:flex; align-items:center;
+  gap:.55rem; padding:.45rem .8rem; background:var(--navy); color:#fff;
+  font-size:.8rem; font-weight:800; font-style:italic; letter-spacing:.06em;
+  text-transform:uppercase; text-shadow:1px 1px 0 #000;
+  box-shadow:inset 0 0 0 1px var(--line-2); user-select:none; }
+.menu summary::-webkit-details-marker { display:none; }
+.menu summary::before { content:""; width:1.1rem; height:2px; background:#fff;
+  box-shadow:0 -5px 0 #fff, 0 5px 0 #fff; margin:5px 0; }
+.menu summary:focus-visible { outline:2px solid var(--gold); outline-offset:2px; }
+.menu[open] summary { background:var(--gold); box-shadow:none; }
+.menu-list { position:absolute; left:0; right:0; top:100%; z-index:20;
+  background-color:var(--bar);
+  background-image:radial-gradient(circle, var(--bar-dot) 1.3px, transparent 1.6px);
+  background-size:7px 7px; border-bottom:2px solid var(--silver-2);
+  box-shadow:0 12px 24px rgba(0,0,0,.55); padding:.3rem 0; }
+.menu-list a { display:block; padding:.75rem 1.4rem; color:#fff;
+  text-decoration:none; font-size:.95rem; font-weight:800; font-style:italic;
+  letter-spacing:.05em; text-transform:uppercase;
+  text-shadow:0 0 2px #000, 2px 2px 0 rgba(0,0,0,.75);
+  border-top:1px solid rgba(255,255,255,.06); position:relative; }
+.menu-list a:first-child { border-top:0; }
+.menu-list a:hover, .menu-list a:focus-visible { background:var(--navy);
+  outline:none; }
+.menu-list a:hover::before, .menu-list a:focus-visible::before { content:"";
+  position:absolute; left:.5rem; top:50%; margin-top:-.32rem;
+  border:.32rem solid transparent; border-left:.5rem solid var(--gold);
+  border-right-width:0; }
+@media (max-width:900px) {
+  nav { display:none; }
+  .menu { display:block; margin-left:auto; }
+  .top .wrap { flex-wrap:nowrap; }
+}
+/* Beside the button on a phone the title gets a little smaller, to stay on
+   one line; and "PGA Tour 2004" never breaks in the middle -- on a phone too
+   narrow even for that, the title wraps after "Tiger Woods". */
+.brand span { white-space:nowrap; }
+@media (max-width:480px) {
+  .brand { font-size:.9rem; letter-spacing:.02em; }
+  .brand small { font-size:.6rem; letter-spacing:.1em; }
+  .menu summary { padding:.4rem .6rem; gap:.45rem; }
+}
+
 .wrap { max-width:56rem; margin:0 auto; padding:0 1rem; }
 main.wrap { padding-top:2rem; padding-bottom:1rem; }
 
@@ -823,6 +871,12 @@ def page(title, body, message=None, kind='err', stats=True, refresh=0,
               if message else '')
     links = (NAV + (NAV_ACCOUNT,)) if signed_in else NAV
     nav = ''.join('<a href="%s">%s</a>' % (u(href), text) for href, text in links)
+    # The same links twice: a row for a wide screen, and for a phone a MENU
+    # button that drops them down as a list.  CSS shows one or the other; the
+    # drop-down is a <details>, so it opens and shuts with no script, and
+    # following a link loads a page with it shut again.
+    nav = ('<nav>%s</nav><details class="menu"><summary>Menu</summary>'
+           '<div class="menu-list">%s</div></details>' % (nav, nav))
     board = _prefix_links(stats_board()) if stats else ''
     strip = _prefix_links(live_strip())
     meta = ('<meta http-equiv="refresh" content="%d">' % refresh) if refresh else ''
@@ -831,7 +885,7 @@ def page(title, body, message=None, kind='err', stats=True, refresh=0,
 <title>%s</title><style>%s</style></head><body>
 <header class="top"><div class="wrap">
 <p class="brand">Tiger Woods <span>PGA Tour 2004</span><small>Online &mdash; community master server</small></p>
-<nav>%s</nav></div></header>%s
+%s</div></header>%s
 <main class="wrap">%s%s</main>
 <footer><div class="wrap">%s
 <p class="foot" style="margin-top:1.4rem">This server runs TW04 Online Server,
