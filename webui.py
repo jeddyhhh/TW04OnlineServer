@@ -632,8 +632,8 @@ def _prefix_links(text):
     return _LINK.sub(lambda m: '%s%s%s"' % (m.group(1), BASE, m.group(2)), text)
 
 
-NAV = (('/', 'Home'), ('/live', 'Live'), ('/leaderboard', 'Leaderboard'),
-       ('/tournaments', 'Tournaments'), ('/stats', 'Stats'),
+NAV = (('/', 'Home'), ('/live', 'Live'), ('/tournaments', 'Tournaments'),
+       ('/leaderboard', 'Head-to-Head'), ('/stats', 'Stats'),
        ('/records', 'Records'), ('/courses', 'Courses'),
        ('/halloffame', 'Hall of Fame'))
 
@@ -1740,12 +1740,12 @@ try them &mdash; working or not &mdash; please report what happened on
                  '<th class="num">Longest</th></tr></thead><tbody>'
                  + ''.join(rows) + '</tbody></table>') if rows else (
             '<p class="foot" style="margin:0">Nobody has finished a match yet.</p>')
-        body = ('<h1>Leaderboard</h1><p class="sub">Head to head, ranked by '
+        body = ('<h1>Head-to-Head</h1><p class="sub">Ranked by '
                 'matches won and then by strokes per hole &mdash; a Front 9 and '
                 'a full round are not comparable any other way.</p>'
                 '<div class="card scroll"><h2>Match and stroke play</h2>%s</div>'
                 % table)
-        return page('Leaderboard', body, signed_in=bool(session))
+        return page('Head-to-Head', body, signed_in=bool(session))
 
     def tourney_record(self, names):
         """This account's personas on the season money list, and their last
@@ -2978,7 +2978,7 @@ try them &mdash; working or not &mdash; please report what happened on
                       if len(born) == 8 and born.isdigit() else '')
         body = """
 <h1>%s</h1>
-<p class="sub">Signed in &mdash; <a href="/leaderboard">leaderboard</a>
+<p class="sub">Signed in &mdash; <a href="/leaderboard">head-to-head</a>
  &middot; <a href="/tournaments">tournaments</a>
  &middot; <a href="/logout">sign out</a></p>
 
