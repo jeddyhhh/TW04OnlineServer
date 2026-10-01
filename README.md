@@ -412,6 +412,7 @@ drives it the way the game does:
 python3 tests/lobbyd_selftest.py      # message format and the password cipher
 python3 tests/lobbyd_authtest.py      # only real credentials get in
 python3 tests/lobbyd_roomtest.py      # rooms, challenges, rematches
+python3 tests/lobbyd_addresstest.py   # which address each console is given for peer to peer
 python3 tests/lobbyd_livetest.py      # the live picture the web site reads
 python3 tests/lobbyd_buddytest.py     # EA Messenger
 python3 tests/lobbyd_reporttest.py    # abuse reports and their private page
