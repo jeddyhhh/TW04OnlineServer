@@ -269,8 +269,41 @@ def dotted_quad(addr):
     return addr
 
 
-def peer_address(peer):
-    """The address to hand the OTHER player for the peer-to-peer leg."""
+def lan_address(peer):
+    """The address `peer`'s console reports for itself in `addr`, when it
+    is a real one: a real PS2's (or PCSX2 in PCAP mode's) address on its own
+    network.  PCSX2's Sockets mode reports 192.0.2.100 for every instance,
+    which is nobody's address, so that gives ''."""
+    addr = (ONLINE.get(peer) or ('', ''))[0] or ''
+    return '' if addr.startswith(PCSX2_VIRTUAL) else addr
+
+
+def same_network(a, b):
+    """True when this server sees `a` and `b` coming from one address: two
+    consoles behind the same router, with the server on the far side."""
+    seen = REACH.get(a)
+    return bool(seen) and seen == REACH.get(b)
+
+
+def peer_address(peer, viewer=None):
+    """The address to hand `viewer` for the peer-to-peer leg to `peer`.
+
+    Normally the address `peer`'s lobby connection comes from (REACH): its
+    public IP over the internet, or its LAN address when the server is on
+    the LAN.  A console's own `addr` report is its private address, which
+    means nothing to a player on another network -- handing that on (as this
+    did for any console not in PCSX2's Sockets mode) would have stopped a real
+    PS2 from ever reaching an opponent in another house.
+
+    Two consoles behind the SAME router (same_network) are given each other's
+    own LAN address instead, when they reported one, so their match stays on
+    the LAN rather than leaving the router and coming back in.  PCSX2 in
+    Sockets mode reports none, and keeps the router's address (which TW04
+    copes with: two Windows PCs in one house play through the online server).
+
+    Ported from the TW05 server (2026-10-01), whose tests/address_test.py
+    the TW04 lobbyd_addresstest.py follows.
+    """
     addr, port = ONLINE.get(peer) or ('', '')
     # A client that never got through `addr` leaves (None, None) here, and an
     # unguarded .startswith() on that killed the handler thread mid-session --
@@ -278,15 +311,16 @@ def peer_address(peer):
     addr, port = addr or '', port or ''
     if ARGS.peer_addr:
         return ARGS.peer_addr, port
-    if addr.startswith(PCSX2_VIRTUAL):
-        # Substitute the address that console's own traffic comes from, i.e.
-        # the host NIC its emulator is bound to.  Confirmed working: the client
-        # built "192.168.1.50:3658:3658" at 0x0036D8C0 out of this and went
-        # in-game.  Two instances on the SAME host address then collide on UDP
-        # 3658, the game's fixed peer-to-peer port, so they need different
-        # adapters, and this picks each one up automatically.
-        return REACH.get(peer, addr), port
-    return addr, port
+    local = lan_address(peer)
+    if viewer and local and same_network(peer, viewer):
+        return local, port
+    # The address that console's own traffic comes from, i.e. the host NIC
+    # its emulator is bound to, or its router.  Confirmed working for PCSX2:
+    # the client built "192.168.1.50:3658:3658" at 0x0036D8C0 out of this and
+    # went in-game.  Two instances on the SAME host address then collide on
+    # UDP 3658, the game's fixed peer-to-peer port, so they need different
+    # adapters, and this picks each one up automatically.
+    return REACH.get(peer) or local or addr, port
 
 
 # ---------------------------------------------------------------------------
@@ -597,16 +631,21 @@ def start_session(a, b):
     # ends up sending to its own public IP and the router has to hairpin it
     # back.  Plenty do not, and the symptom is a match that is agreed in the
     # lobby and then never starts -- with nothing in this log to say why.
-    ends = {p: peer_address(p)[0] for p in (a, b)}
-    if ends[a] and ends[a] == ends[b]:
-        log('!!!', '    %s and %s both resolve to %s -- they are behind the '
-                   'same NAT as far as this server can see, so the peer-to-'
-                   'peer leg needs the router to hairpin.  If the match never '
-                   'starts, that is why; run the lobby on their LAN or use '
-                   '--peer-addr.' % (a, b, ends[a]))
+    if same_network(a, b):
+        if lan_address(a) and lan_address(b):
+            log('***', '    %s and %s share one network (%s) -- each is given '
+                       'the other\'s LAN address (%s, %s)'
+                % (a, b, REACH[a], lan_address(a), lan_address(b)))
+        else:
+            log('!!!', '    %s and %s both come from %s -- behind the same '
+                       'router, with no LAN address to give instead (PCSX2 '
+                       'in Sockets mode), so the peer-to-peer leg needs the '
+                       'router to hairpin.  If the match never starts, that '
+                       'is why; run the lobby on their LAN or use '
+                       '--peer-addr.' % (a, b, REACH[a]))
 
     for me, peer in ((a, b), (b, a)):
-        addr, port = peer_address(peer)
+        addr, port = peer_address(peer, me)
         if not addr:
             log('!!!', '    no endpoint known for %s -- +ses will be useless' % peer)
         push_to(me, '+ses', {
