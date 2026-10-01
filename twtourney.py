@@ -370,7 +370,15 @@ def month_of(day):
     return d.year, d.month
 
 
-def generate_month(year, month, courses=None):
+def seed(text, epoch=0):
+    """A generator's seed for calendar generation `epoch` (twdb's
+    calendar_epoch).  Generation 0 is the seed exactly as it always was, so a
+    calendar already stored is regenerated identically; each `--reset-stats`
+    moves a database on one generation and deals it a new calendar."""
+    return text if not epoch else '%s #%d' % (text, epoch)
+
+
+def generate_month(year, month, courses=None, epoch=0):
     """A month of events: [{day, name, course, purse}], one per day.
 
     Seeded from the month itself rather than the clock.  That is deliberate:
@@ -384,7 +392,7 @@ def generate_month(year, month, courses=None):
     tour rather than a shuffle that lands on Pebble Beach three times in a week.
     """
     first, length = month_days(year, month)
-    rng = random.Random('TW04 %04d-%02d' % (year, month))
+    rng = random.Random(seed('TW04 %04d-%02d' % (year, month), epoch))
     pool = []
     out = []
     taken = set()          # names already used this month
@@ -401,7 +409,7 @@ def generate_month(year, month, courses=None):
         # people have already seen.
         rng.randrange(500000, 5000001, 50000)
         day = first + i
-        conditions = event_conditions(day)
+        conditions = event_conditions(day, epoch)
         purse = event_purse(course, conditions)
         # A date with an icon made for it gets that icon, and takes its name
         # from the day rather than the rotation -- "Christmas at Pebble Beach"
@@ -428,7 +436,7 @@ def generate_month(year, month, courses=None):
     return out
 
 
-def replace_course(day, courses=None):
+def replace_course(day, courses=None, epoch=0):
     """A playable event for a day whose course turned out not to be.
 
     Deterministic from the day, so repairing the same day twice gives the same
@@ -436,7 +444,7 @@ def replace_course(day, courses=None):
     change ONE day without disturbing the rest of a calendar that people may
     already have looked at or played.
     """
-    rng = random.Random('TW04 repair %d' % day)
+    rng = random.Random(seed('TW04 repair %d' % day, epoch))
     course = rng.choice(TOURNEY_COURSES)
     cname = courses[course] if courses and course < len(courses) else None
     return {'day': day, 'course': course,
@@ -585,12 +593,12 @@ PURSE_MULTIPLIERS = {
 CONDITION_DEFAULT_CHANCE = 0.5
 
 
-def event_conditions(day):
+def event_conditions(day, epoch=0):
     """The conditions for the event on `day`: {setting: option} for each of
     EVENT_SETTINGS.  Seeded from the day alone, NOT from the month's generator
     -- adding this must not shift a single course or name in a calendar that
     is already stored -- so the same day always gets the same conditions."""
-    rng = random.Random('TW04 conditions %d' % day)
+    rng = random.Random(seed('TW04 conditions %d' % day, epoch))
     out = {}
     for setting in EVENT_SETTINGS:
         default = DEFAULT_CONDITIONS[setting]

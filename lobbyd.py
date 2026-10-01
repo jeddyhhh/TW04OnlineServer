@@ -373,7 +373,8 @@ def ensure_season():
     for _ in range(ARGS.months + 1):
         first, length = twtourney.month_days(year, month)
         if not DB.month_generated(first, length):
-            DB.add_events(twtourney.generate_month(year, month, twstats.COURSES))
+            DB.add_events(twtourney.generate_month(
+                year, month, twstats.COURSES, DB.calendar_epoch()))
             made.append('%04d-%02d' % (year, month))
         year, month = year + (month == 12), month % 12 + 1
     if made:
@@ -399,7 +400,8 @@ def repair_calendar():
     """
     bad = DB.events_with_course(twtourney.UNPLAYABLE_COURSES, twtourney.today())
     for event in bad:
-        fixed = twtourney.replace_course(event['day'], twstats.COURSES)
+        fixed = twtourney.replace_course(event['day'], twstats.COURSES,
+                                         DB.calendar_epoch())
         DB.replace_event(event['day'], fixed['name'], fixed['course'])
         log('!!!', 'rescheduled %s: %s was not playable, now %s'
             % (twtourney.from_day(event['day']),
@@ -425,7 +427,8 @@ def reprice_calendar():
     def plan(event):
         conditions = event['conditions']
         if not conditions and event['day'] > today:
-            conditions = twtourney.event_conditions(event['day'])
+            conditions = twtourney.event_conditions(event['day'],
+                                                    DB.calendar_epoch())
         return conditions, twtourney.event_purse(event['course'], conditions)
 
     changed = DB.refresh_events(today, plan)

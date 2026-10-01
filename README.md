@@ -304,6 +304,27 @@ python3 twdb.py --set-password ACCOUNT PASS
 python3 twdb.py --disable ACCOUNT        # a ban; --enable undoes it
 ```
 
+**Starting afresh.** To wipe the server's play but keep everyone's account
+and personas, stop the server and run:
+
+```bash
+python3 twdb.py --reset-stats
+```
+
+It keeps accounts, personas, their uploaded golfers, buddy lists and the
+abuse reports, and wipes matches, tournament rounds, the live board's
+history. The tournament calendar goes too, and a new one is drawn when the
+lobby next starts. It refuses to run while the lobby is up, saves a full copy
+of the database first (`before-reset-DATE.db` beside it), and asks you to type
+`RESET` (`--yes` skips that).
+
+**Just a new calendar.** `python3 twdb.py --reset-calendar` (server stopped)
+clears the tournament events from tomorrow on and picks a random calendar
+generation, so the lobby deals a new schedule when it starts. Today, past
+events and any day somebody has already played stay, so prize money and
+leaderboards are unchanged, and nothing else is touched. Same safeguards:
+a copy first (`before-calendar-DATE.db`) and `RESET` to confirm.
+
 Players normally manage their own accounts and personas on the web site. An
 account can hold up to four personas.
 
@@ -413,6 +434,7 @@ python3 tests/lobbyd_selftest.py      # message format and the password cipher
 python3 tests/lobbyd_authtest.py      # only real credentials get in
 python3 tests/lobbyd_roomtest.py      # rooms, challenges, rematches
 python3 tests/lobbyd_addresstest.py   # which address each console is given for peer to peer
+python3 tests/twdb_resettest.py       # --reset-stats keeps the accounts and wipes the rest
 python3 tests/lobbyd_livetest.py      # the live picture the web site reads
 python3 tests/lobbyd_buddytest.py     # EA Messenger
 python3 tests/lobbyd_reporttest.py    # abuse reports and their private page

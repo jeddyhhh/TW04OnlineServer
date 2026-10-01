@@ -267,6 +267,13 @@ CREATE INDEX IF NOT EXISTS reports_accused ON reports(accused);
 -- One-line facts the server keeps current: its heartbeat, its uptime, the
 -- rooms it is offering.  A key/value table rather than columns because what is
 -- worth publishing changes more often than the schema should.
+-- Settings that belong to the database and outlive a stats reset: the
+-- calendar's generation (calendar_epoch) is the only one so far.
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS live (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -1134,6 +1141,122 @@ class DB:
                  ' value=excluded.value, at=excluded.at',
                  (key, str(value), time.time()))
 
+    # -- a fresh start ----------------------------------------------------
+    #
+    # What `--reset-stats` clears.  Everything that is play or the record of
+    # it -- matches, tournament rounds, the calendar, the live board's
+    # history -- while accounts, personas, their uploaded golfers,
+    # Messenger buddy lists and the abuse reports stay.  Tables a build does
+    # not have are skipped, so the one list serves an older database too.
+    RESET_TABLES = ('results', 'sessions', 'tourney', 'tourney_log',
+                    'course_par', 'events', 'presence', 'playing', 'activity',
+                    'live', 'daily_peak', 'lkeys')
+
+    def get_meta(self, key, default=None):
+        row = self.one('SELECT value FROM meta WHERE key = ?', (key,))
+        return row['value'] if row else default
+
+    def set_meta(self, key, value):
+        self.run('INSERT INTO meta (key, value) VALUES (?, ?)'
+                 ' ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+                 (key, str(value)))
+
+    def calendar_epoch(self):
+        """Which draw of the tournament calendar this database is on: 0 for
+        the original seeds (every calendar made before resets existed), one
+        more after each `--reset-stats`, so a reset deals a new calendar
+        instead of regenerating the same one (twtourney.generate_month)."""
+        try:
+            return int(self.get_meta('calendar_epoch', 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def server_running(self, within=120):
+        """True when a lobby has written its heartbeat in the last `within`
+        seconds -- it writes one every few, and 0 when it stops cleanly."""
+        row = self.one("SELECT value FROM live WHERE key = 'heartbeat'")
+        if not row:
+            return False
+        try:
+            beat = float(row['value'])
+        except (TypeError, ValueError):
+            return False
+        return beat > 0 and time.time() - beat < within
+
+    def reset_stats(self):
+        """Wipe play and its record (RESET_TABLES), keep the accounts, and
+        move the calendar on a generation.  One transaction: all or nothing.
+        Returns {table: rows removed}."""
+        have = {r['name'] for r in self.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table'")}
+        removed = {}
+        with self.lock:
+            try:
+                for table in self.RESET_TABLES:
+                    if table in have:
+                        removed[table] = self.conn.execute(
+                            'DELETE FROM ' + table).rowcount
+                row = self.conn.execute(
+                    "SELECT value FROM meta WHERE key = 'calendar_epoch'"
+                ).fetchone()
+                try:
+                    epoch = int(row['value']) if row else 0
+                except (TypeError, ValueError):
+                    epoch = 0
+                self.conn.execute(
+                    "INSERT INTO meta (key, value) VALUES ('calendar_epoch', ?)"
+                    ' ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+                    (str(epoch + 1),))
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+            self._match_cache = (None, [])
+            self.conn.execute('VACUUM')
+        return removed
+
+    def reset_calendar(self, today=None, epoch=None):
+        """Deal a new tournament calendar from tomorrow on, on a RANDOM
+        generation (`epoch`, for the test).  Today and every past day stay:
+        their purses are what the money lists and prize money are worked out
+        from, and today's event may be being played.  So does any later day
+        somebody has a round on.  The lobby fills the cleared days from the
+        new generation when it next starts (ensure_season sees the months
+        short and adds only the missing days).  Returns (days cleared, new
+        generation)."""
+        today = twtourney.today() if today is None else today
+        current = self.calendar_epoch()
+        while epoch is None or epoch == current:
+            epoch = secrets.randbelow(2 ** 31 - 2) + 1
+        with self.lock:
+            try:
+                cleared = self.conn.execute(
+                    'DELETE FROM events WHERE day > ? AND day NOT IN'
+                    ' (SELECT DISTINCT day FROM tourney)', (today,)).rowcount
+                self.conn.execute(
+                    "INSERT INTO meta (key, value) VALUES ('calendar_epoch', ?)"
+                    ' ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+                    (str(epoch),))
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+        return cleared, epoch
+
+    def copy_to(self, path):
+        """A consistent copy of the whole database at `path` (SQLite's own
+        backup API, like `backup`)."""
+        src = sqlite3.connect(self.path)
+        try:
+            dst = sqlite3.connect(path)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+        finally:
+            src.close()
+        return path
+
     def get_live(self, key, default=None):
         row = self.one('SELECT value, at FROM live WHERE key = ?', (key,))
         if row is None:
@@ -1564,6 +1687,76 @@ class DB:
         return rows[:limit]
 
 
+def reset_calendar_command(args):
+    """`--reset-calendar`: refuse while a lobby is running, save a copy, ask,
+    clear tomorrow on and pick a random generation."""
+    db = DB(args.db)
+    if db.server_running():
+        print('The lobby is running on this database (its heartbeat is less '
+              'than two minutes\nold).  Stop it first -- ./tw04.sh stop -- '
+              'and run this again.')
+        return 1
+    today = twtourney.today()
+    upcoming = db.one('SELECT COUNT(*) AS n FROM events WHERE day > ?',
+                      (today,))['n']
+    print('This clears the %d upcoming event(s) from tomorrow on and deals a '
+          'new calendar\nfor them (a random draw) when the lobby starts.  '
+          'Today, the past, any day\nsomebody has already played, and '
+          'everything else stay as they are.' % upcoming)
+    copy = os.path.join(os.path.dirname(os.path.abspath(db.path)),
+                        'before-calendar-%s.db' % time.strftime('%Y-%m-%d-%H%M%S'))
+    if not args.yes:
+        try:
+            answer = input('\nType RESET to go ahead: ')
+        except EOFError:
+            answer = ''
+        if answer.strip() != 'RESET':
+            print('Nothing changed.')
+            return 1
+    db.copy_to(copy)
+    print('Saved a copy first: %s' % copy)
+    cleared, epoch = db.reset_calendar(today)
+    print('Cleared %d upcoming event(s); calendar generation %d.  Start the '
+          'server again: ./tw04.sh start' % (cleared, epoch))
+    return 0
+
+
+def reset_command(args):
+    """`--reset-stats`: refuse while a lobby is running, save a copy, ask,
+    wipe."""
+    db = DB(args.db)
+    if db.server_running():
+        print('The lobby is running on this database (its heartbeat is less '
+              'than two minutes\nold).  Stop it first -- ./tw04.sh stop -- '
+              'and run this again.')
+        return 1
+    accounts = db.one('SELECT COUNT(*) AS n FROM accounts')['n']
+    personas = db.one('SELECT COUNT(*) AS n FROM personas')['n']
+    print('This keeps %d account(s) and %d persona(s), with their golfers, '
+          'buddy lists\nand the abuse reports, and wipes everything else: '
+          'matches, tournament\nrounds, the tournament calendar (a new one is '
+          'drawn when the lobby starts)\nand the live board\'s history.'
+          % (accounts, personas))
+    copy = os.path.join(os.path.dirname(os.path.abspath(db.path)),
+                        'before-reset-%s.db' % time.strftime('%Y-%m-%d-%H%M%S'))
+    if not args.yes:
+        try:
+            answer = input('\nType RESET to go ahead: ')
+        except EOFError:
+            answer = ''
+        if answer.strip() != 'RESET':
+            print('Nothing changed.')
+            return 1
+    db.copy_to(copy)
+    print('Saved a copy first: %s' % copy)
+    removed = db.reset_stats()
+    print('Wiped: %s' % (', '.join('%s %d' % (t, n) for t, n in removed.items()
+                                   if n) or 'nothing was there'))
+    print('Calendar generation %d.  Start the server again: ./tw04.sh start'
+          % db.calendar_epoch())
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1577,7 +1770,26 @@ def main():
     ap.add_argument('--disable', metavar='ACCOUNT')
     ap.add_argument('--enable', metavar='ACCOUNT')
     ap.add_argument('--list', action='store_true')
+    ap.add_argument('--reset-stats', action='store_true',
+                    help='start the server afresh but keep every account and '
+                         'persona: wipes matches, tournament rounds and the '
+                         'calendar (a new one is drawn when the lobby next '
+                         'starts).  Stop the server first; a copy of the '
+                         'database is saved beside it before anything goes')
+    ap.add_argument('--reset-calendar', action='store_true',
+                    help='deal a new tournament calendar from tomorrow on '
+                         '(a random draw), keeping today, the past and '
+                         'everything else.  Stop the server first; a copy of '
+                         'the database is saved beside it before anything goes')
+    ap.add_argument('--yes', action='store_true',
+                    help='with --reset-stats or --reset-calendar: do not '
+                         'ask to confirm')
     args = ap.parse_args()
+
+    if args.reset_stats:
+        return reset_command(args)
+    if args.reset_calendar:
+        return reset_calendar_command(args)
 
     db = DB(args.db)
     try:
