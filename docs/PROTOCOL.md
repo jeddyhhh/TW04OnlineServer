@@ -5365,3 +5365,69 @@ GitHub issues. Open questions for a real console: whether the DNAS patch
 holds, whether the cheat engine coexists with the game's networking, and
 whether OPL's SMB (network) loading clashes with the game's own use of the
 adapter.
+
+### 2026-09-27: live-site review fixes
+
+A crawl of the live site (61 pages, all 200 except one) found:
+
+- The first event's page linked "<- previous day" to a day with no event
+  (404). Event-page navigation now only links days that had an event or
+  rounds.
+- There was no frame protection and no HSTS. Every reply now sends
+  `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors
+  'none'`, plus `Strict-Transport-Security: max-age=31536000` whenever
+  cookies are Secure (i.e. not the LAN build).
+- `Server:` said `tw04-webui Python/3.12.3`. `version_string()` now returns
+  just `tw04-webui`.
+- Test accounts showed on the public Live feed. The admin page gained Delete
+  account, which requires typing the name. `DB.delete_account` removes the
+  account, its personas (and by foreign key their golfers and buddies), their
+  tourney and tourney_log rows, every match they were in (sessions and
+  results), and their presence, lkeys and activity lines. Abuse reports are
+  kept. It also signs the account out of the website.
+
+## Every tournament round counts as golf played (2026-09-27)
+
+`twrecords.rounds()` used to read tournament rounds from `tourney`, which keeps
+one row per player per day (their best), so the Courses page said 1 round at a
+course played three times.  It now reads `tourney_log` (every round) and marks
+the kept one `counted` -- `add_tourney` stamps both tables with the same
+`received`, which is how they are matched.  `twrecords.counts(r)` is the test.
+
+- Every round: course/player round counts, averages, records, handicap,
+  conditions cost, and MY RESUME's rounds/averages (lobbyd `stat_record` now
+  reads `tourney_log`).
+- Counted round only: `place`/`field`, `tourney_wins`, the news leader and
+  yesterday's winner.  Standings, money and EVENTS ENTERED/WON still come from
+  `tourney` in twdb, unchanged.
+- A replay's result cell on round tables reads "Not counted".
+- Test: `twdb_tourneytest.every_round`.
+
+## 65. Each console gets the address it can actually reach
+
+*Ported from the TW05 server, 2026-10-02.*
+
+`peer_address` used to hand a console its opponent's own `addr` report
+unless that was PCSX2's Sockets placeholder (`192.0.2.100`). For a real PS2,
+or PCSX2 in PCAP mode, that report is a private home address such as
+`192.168.1.20`. A player in another house would have been sent it and could
+never have connected. Nobody had hit this, because every TW04 player so far
+has used PCSX2 in Sockets mode.
+
+**The rule now** (`peer_address(peer, viewer)`):
+
+- **Normally:** the address the opponent's lobby connection comes from
+  (`REACH`). That's the public IP over the internet, or the LAN address with
+  a LAN server.
+- **Both consoles come from one address** (`same_network`, so behind one
+  router): each is given the other's own LAN address (`lan_address`) when it
+  reported one, which keeps the match on the LAN. PCSX2 in Sockets mode
+  reports none, so it keeps the router's address. Section 60 shows that works
+  for TW04.
+- `--peer-addr` still overrides everything.
+
+`+ses ADDR` is worked out for each recipient, and the start of each match
+logs which case applied. `tests/lobbyd_addresstest.py` covers five cases:
+two networks, one router with real PS2s, one router with PCSX2 Sockets, a
+LAN server, and a PS2 mixed with a PCSX2.
+
