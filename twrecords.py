@@ -453,6 +453,39 @@ def season(rs, db, year, month, open_day=None):
             'rounds': len(mine)}
 
 
+def tourney_money(db, persona, open_day=None):
+    """A player's tournament prize money, for their page:
+
+        lifetime    every finished event they have played, all time
+        best        their biggest month (season), and best_month = (y, m)
+                    for it, or None before they have won anything
+        best_open   True when that month is the current, unfinished one
+
+    Each month is that season's money list (tourney_standings, the same rule
+    as the money lists and the console), so the figures always agree with
+    them; today's event pays nothing until it is over."""
+    open_day = twtourney.today() if open_day is None else open_day
+    out = {'lifetime': 0, 'best': 0, 'best_month': None, 'best_open': False}
+    row = db.one('SELECT MIN(day) AS first FROM tourney WHERE persona = ?'
+                 ' COLLATE NOCASE', (persona,))
+    if not row or row['first'] is None:
+        return out
+    month = twtourney.from_day(row['first']).replace(day=1)
+    now = twtourney.from_day(open_day)
+    while (month.year, month.month) <= (now.year, now.month):
+        first, last = month_days(month.year, month.month)
+        earned = next((r['earned'] for r in db.tourney_standings(
+            first, min(last, open_day), twtourney.payout, open_day=open_day)
+            if r['name'].lower() == persona.lower()), 0)
+        out['lifetime'] += earned
+        if earned > out['best']:
+            out.update(best=earned, best_month=(month.year, month.month),
+                       best_open=last >= open_day)
+        month = (month.replace(year=month.year + 1, month=1)
+                 if month.month == 12 else month.replace(month=month.month + 1))
+    return out
+
+
 def seasons(rs, db, open_day=None):
     """Every month from the first round played to now, newest first."""
     open_day = twtourney.today() if open_day is None else open_day
@@ -871,6 +904,44 @@ def _selftest():
                      % ((p['best']['strokes'], p['tourney_wins']),))
     if p['head_to_head'][0]['opponent'] != 'bob':
         fails.append('alice has played bob')
+
+    # Prize money for the profile: two finished events last month (alice
+    # wins both) and one the month before (bob wins).  Lifetime is all three
+    # paydays; the best season is last month, and today's open event pays
+    # nothing yet.
+    this = twtourney.from_day(today).replace(day=1)
+    last_m = (this - datetime.timedelta(days=1)).replace(day=1)
+    prev_m = (last_m - datetime.timedelta(days=1)).replace(day=1)
+    d1, d2 = twtourney.to_day(last_m) + 2, twtourney.to_day(last_m) + 3
+    d3 = twtourney.to_day(prev_m) + 4
+    db.add_events([{'day': d, 'name': 'Money %d' % d, 'course': 4,
+                    'purse': purse}
+                   for d, purse in ((d1, 2000000), (d2, 1000000),
+                                    (d3, 3000000))])
+    def card(strokes):
+        bird, bog = max(0, 72 - strokes), max(0, strokes - 72)
+        return {'HOLES': 18, 'STROKES': strokes, 'PUTTS': 30, 'GIR': 10,
+                'FRWY': 8, 'DRVS': 14, 'LDRV': 300, 'LPUT': 20, 'EAGS': 0,
+                'BIRD': bird, 'ACES': 0, 'PARS': 18 - bird - bog,
+                'SBOG': bog, 'DBOG': 0, 'TBOG': 0, 'DONE': 1, 'QUIT': 0}
+    for d, a, b in ((d1, 66, 70), (d2, 68, 72), (d3, 74, 67)):
+        db.add_tourney('alice', d, 4, card(a))
+        db.add_tourney('bob', d, 4, card(b))
+    first_pay = twtourney.payout
+    want_alice = first_pay(2000000, 1) + first_pay(1000000, 1) +         first_pay(3000000, 2)
+    got = tourney_money(db, 'ALICE', today)
+    print('money: alice lifetime %s, best %s in %r'
+          % (twtourney.money(got['lifetime']), twtourney.money(got['best']),
+             got['best_month']))
+    if got['lifetime'] != want_alice or got['best_month'] !=             (last_m.year, last_m.month) or got['best'] !=             first_pay(2000000, 1) + first_pay(1000000, 1) or got['best_open']:
+        fails.append('alice: lifetime %d, best season last month, got %r'
+                     % (want_alice, got))
+    got = tourney_money(db, 'bob', today)
+    if got['best_month'] != (prev_m.year, prev_m.month) or             got['best'] != first_pay(3000000, 1):
+        fails.append('bob: best season the month before last, got %r' % got)
+    if tourney_money(db, 'nobody', today) != {
+            'lifetime': 0, 'best': 0, 'best_month': None, 'best_open': False}:
+        fails.append('a player with no rounds has no prize money')
 
     lead = dict((cat[0], rows) for cat, rows in leaders(rs, min_rounds=1))
     if lead['drive_avg'][0][0] != 'bob':

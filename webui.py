@@ -1970,6 +1970,19 @@ try them &mdash; working or not &mdash; please report what happened on
                 _figure('%d&ndash;%d&ndash;%d' % (p['won'], p['lost'], p['tied']),
                         'Match record'),
                 _figure(p['tourney_wins'], 'Tournament wins')]
+        # Prize money: all time, and the best season (a calendar month), on
+        # the same rule as the money lists.  Shown once they have earned any.
+        money = twrecords.tourney_money(DB, name)
+        if money['lifetime']:
+            figs.append(_figure(twtourney.money(money['lifetime']),
+                                'Tournament winnings'))
+            y, m = money['best_month']
+            figs.append(_figure(
+                '%s <small>%s%s</small>' % (
+                    twtourney.money(money['best']),
+                    datetime.date(y, m, 1).strftime('%b %Y'),
+                    ', so far' if money['best_open'] else ''),
+                'Best season'))
         if best:
             figs.append(_figure('%d <small>%s</small>' % (
                 best['strokes'], twrecords.fmt_par(best['to_par'])), 'Best round'))
