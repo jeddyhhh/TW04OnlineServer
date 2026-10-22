@@ -297,11 +297,22 @@ def make_entry(name, day, purse=0, course=0, width=DATA_BYTES, data=None,
 #   7   Skillz        not a golf course -- the skills-challenge venue, and it
 #                     does not work online
 #   21  NA            a placeholder
+#   22  Tiger's Dream 18  not a fixed layout either -- see below
 #   23  Random 18     a different layout for every player
 #   24-29 Compilations  ditto
 #
-# 22 (Tiger's Dream 18) is kept: it is a fixed eighteen holes like any other.
-UNPLAYABLE_COURSES = (7, 21, 23, 24, 25, 26, 27, 28, 29)
+# Tiger's Dream 18 was kept at first, as "a fixed eighteen holes like any
+# other", and a Tiger's Dream day loaded Pebble Beach under the Tiger's Dream
+# scorecard.  It has no course folder (the folder table at 0x0030E228 stops at
+# 21, and 0x00224E00 answers "none" for anything past 20).  The course setup
+# at 0x00223A20 treats 22 like Random 18 and the Compilations: it sets a flag
+# (+0xF8) and 0x00225830 fills a per-hole (course, hole) list from slot 0 of
+# the custom-course table at 0x0033FEE0 (0x001BA2B0 maps 22 -> slot 0, 24..29
+# -> slots 1..6).  That table is not in the ELF image -- it is filled at run
+# time from profile data -- so an empty slot maps every hole to course 0.
+#
+# Its place in DIFFICULTY_ORDER is left alone so no other course's purse moves.
+UNPLAYABLE_COURSES = (7, 21, 22, 23, 24, 25, 26, 27, 28, 29)
 TOURNEY_COURSES = tuple(c for c in range(30) if c not in UNPLAYABLE_COURSES)
 
 # The tournament courses, HARDEST FIRST.  From course_difficulty.json (CPU

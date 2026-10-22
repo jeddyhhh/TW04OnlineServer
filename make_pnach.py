@@ -26,6 +26,10 @@ WHAT IT PATCHES
    starts.  Cleaner, but it has not yet run successfully, so it is not the
    default.
 
+3. The leaderboard date ceiling (DATE_CLAMPS), and the joining player's
+   fallback address (GUEST_ADDR), without which a match between two networks
+   never connects.
+
 EVERY PATCH USES `word`, NOT `extended`.  See the comment on emit() -- getting
 this wrong cost three capture attempts and looked like four different bugs.
 """
@@ -166,6 +170,29 @@ DATE_CLAMPS = (
 )
 
 
+# --- the joining player's address after LAN discovery fails --------------
+#
+# `+ses` puts FROM (the opponent's name) at peer+0x20 and ADDR (the address the
+# server chose) at peer+0x40 (0x0028B210, 0x0028B260).  Both sides then build
+# their connection string the same way -- the LAN address at peer+0x60 if LAN
+# discovery found the opponent (peer+0x88 & 0x40), otherwise a fallback -- but
+# the two fallbacks are not the same field:
+#
+#   0x0028B4B0  addiu a0, s1, 0x40   ; host  -> 0x0027AB40(ADDR + ":3658")
+#   0x0028B5F0  addiu a0, s1, 0x20   ; guest -> 0x0027ABC0(FROM + ":3658")
+#
+# so on any network where LAN discovery fails -- every match between two
+# houses -- the joining player tries to open "opponent-name:3658:3658", which
+# is not an address, and never sends its first packet.  Two consoles behind one
+# router are unaffected: LAN discovery succeeds and neither fallback runs.
+#
+# One word makes the guest read ADDR like the host does.  The original
+# 0x26240020 was checked against the ELF, and an offline run of the guest
+# branch showed the string change from the opponent's name to the address.
+GUEST_ADDR = (0x0028B5F0, 0x26240040,
+              'addiu $a0, $s1, 0x40 (was 0x20): guest uses ADDR, not FROM')
+
+
 def build(ip, port, strong=False, comment=None):
     out = [
         'gametitle=%s' % TITLE,
@@ -213,7 +240,14 @@ def build(ip, port, strong=False, comment=None):
     ]
     for addr, word, note in DATE_CLAMPS:
         out.append(emit(addr, word, note))
-    out.append('')
+    out += [
+        '',
+        '// --- joining player: connect to the server-given ADDR ---',
+        '// Without this the guest of a match between two networks connects to',
+        "// the opponent's NAME after LAN discovery fails (0x0028B5F0).",
+        emit(*GUEST_ADDR),
+        '',
+    ]
     return '\n'.join(out)
 
 
@@ -228,14 +262,15 @@ def writes(ip, port):
                     for n, w in enumerate(words(str(port), PORT_FIELD))]
     out.append((DNAS_LOAD, DNAS_LOAD_NEW))
     out += [(addr, word) for addr, word, _note in DATE_CLAMPS]
+    out.append(GUEST_ADDR[:2])
     return out
 
 
 def _codes(ip, port):
     """The cheat lines: master code, then one type-2 write per patch word."""
     master = ['Master Code', '9%07X %08X' % MASTER_CODE]
-    online = ['TW04 Online - UNTESTED (lobby %s:%d, DNAS, leaderboard dates)'
-              % (ip, port)]
+    online = ['TW04 Online - UNTESTED (lobby %s:%d, DNAS, leaderboard dates, '
+              'guest address)' % (ip, port)]
     online += ['2%07X %08X' % (addr, word) for addr, word in writes(ip, port)]
     return master, online
 

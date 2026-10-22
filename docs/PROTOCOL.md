@@ -4205,6 +4205,32 @@ The exclusions are now named individually, with a reason each:
 
 22 (Tiger's Dream 18) stays: it is a fixed eighteen holes like any other.
 
+**It is not, and it no longer stays.**  A Tiger's Dream 18 day loaded Pebble
+Beach while drawing the Tiger's Dream scorecard.  The course has no folder on
+the disc (`DATA/01_PEB` .. `DATA/22_ANT` are the 21 real courses), and the
+folder lookup at `0x00224E00` returns `none` for any course byte above 20 -- the
+table at `0x0030E228` is eight-byte strings in course order, `22_Ant` at index 4
+(Penguin Falls) and `08_Dri` at 7 (Skillz).  So 22 has to be turned into real
+courses hole by hole, and the course setup at `0x00223A20` does that the same
+way for every composite:
+
+    23        Random 18     0x00225920, flag +0xF7
+    22        Tiger's Dream 0x00225830, flag +0xF8
+    24..29    Compilations  0x002258A0, flag +0xF9 = n - 23
+
+`0x00225830` asks `0x001BA330(22, hole)` and `0x001BA380(22, hole)` for each of
+the 18 holes, and both read `0x0033FEE0 + slot * 36 + hole * 2` -- a (course,
+hole) byte pair per hole, with the slot from `0x001BA2B0` (22 -> 0, 24..29 -> 1..6).
+`0x0033FEE0` is past the end of the ELF's loaded image (`0x00317B80`), and the
+code around it (`0x001B5E00`..`0x001BA2xx`) is the profile's: the hole list is
+filled at run time, not shipped.  An unfilled slot is all zeros, every hole's
+course is 0, and that is Pebble Beach.  The online tournament path
+(`0x002DEB1C`) calls `0x00223A20` with the event's course byte like any other,
+so nothing about it is wrong -- the data simply is not there.
+
+So 22 joins `UNPLAYABLE_COURSES`, and `repair_calendar()` below moves any
+upcoming Tiger's Dream day exactly as it moved Skillz.
+
 ### Fixing a calendar already written
 
 Months are generated once and kept, so correcting the list does not correct a

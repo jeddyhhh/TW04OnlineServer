@@ -75,7 +75,10 @@ def check_columns(db):
         twstats.PUTTS_PER_HOLE: 156,         # 14 / 9, in hundredths
         twstats.DRIVING_ACCURACY: 43,        # 3 of 7 drives
         twstats.HOLES_PER_EAGLE: 9,          # 9 holes, 1 eagle
-        twstats.BIRDIE_AVERAGE: 4,           # 4 birdies over 1 round
+        # A Front 9 is golf but not a round: no best round, scoring or birdie
+        # average comes out of it (twrecords' rule, "18-hole rounds only").
+        twstats.BIRDIE_AVERAGE: 0,
+        twstats.BEST_ROUND: 0,
         twstats.MATCH_POINTS: 2,             # one win, in a match room
         twstats.STROKE_POINTS: 0,
     }
@@ -105,6 +108,84 @@ def check_columns(db):
         if got_drop != drop:
             out.append('%s drop%% should be %d, got %d' % (who, drop, got_drop))
     return out
+
+
+def card(auth, host, guest, holes, strokes, **extra):
+    """A finished two-player result: both sides the same card unless `extra`
+    says otherwise (KEY0 / KEY1 = value)."""
+    f = {'AUTH': auth, 'REPT': host, 'WHEN': '2026.10.1 12:00:00',
+         'NAME0': host, 'NAME1': guest}
+    for side in '01':
+        f.update({'DONE' + side: '1', 'QUIT' + side: '0', 'SCORE' + side: '0',
+                  'HOLES' + side: str(holes), 'STROKES' + side: str(strokes),
+                  'PUTTS' + side: str(2 * holes), 'BIRD' + side: '2',
+                  'PARS' + side: str(holes - 2), 'GIR' + side: '9',
+                  'DRVS' + side: '10', 'FRWY' + side: '5', 'LDRV' + side: '280'})
+    f['STROKES1'] = str(strokes + 5)
+    f.update({k: str(v) for k, v in extra.items()})
+    return f
+
+
+def check_scoring_rounds():
+    """MY RESUME's scoring lines take full rounds and believable numbers only,
+    and its record counts every match, not the newest 200."""
+    import lobbyd
+    import twstats
+
+    path = os.path.join(tempfile.gettempdir(), 'tw04-test-scoring.db')
+    for leftover in (path, path + '-wal', path + '-shm'):
+        try:
+            os.remove(leftover)
+        except OSError:
+            pass
+    db = twdb.DB(path)
+    db.create_account('amy', 'pass1234')
+    db.create_account('ben', 'pass1234')
+
+    class Stub(object):
+        standing = lobbyd.Handler.standing
+        stat_record = lobbyd.Handler.stat_record
+    lobbyd.DB = db
+    lobbyd.ARGS = type('A', (), {'probe_stats': False})()
+
+    def add(auth, room, result):
+        db.add_session(auth, room, 'amy', 'ben', 1)
+        db.add_result(result)
+
+    fails = []
+    # Match play closed out on the 14th: 50 strokes is not a round of golf.
+    # The console also claims 1025 putts, which is not believable at all.
+    add('close0001', 'Match.T.East', card('close0001', 'amy', 'ben', 14, 50,
+                                          PUTTS0=1025, SCORE0=5))
+    row = twstats.unpack(Stub().stat_record('amy')[:-1])
+    if row[twstats.BEST_ROUND] or row[twstats.SCORING_AVERAGE]:
+        fails.append('a 14-hole closeout became a best round of %d'
+                     % row[twstats.BEST_ROUND])
+    if row[twstats.PUTTS_PER_HOLE] > 600:
+        fails.append('1025 putts were believed: %d/100 per hole'
+                     % row[twstats.PUTTS_PER_HOLE])
+
+    add('full00001', 'Stroke.T.East', card('full00001', 'amy', 'ben', 18, 70))
+    row = twstats.unpack(Stub().stat_record('amy')[:-1])
+    if (row[twstats.BEST_ROUND], row[twstats.SCORING_AVERAGE],
+            row[twstats.BIRDIE_AVERAGE]) != (70, 70, 2):
+        fails.append('one full round of 70 with 2 birdies should be best 70,'
+                     ' average 70, birdies 2; got %d, %d, %d'
+                     % (row[twstats.BEST_ROUND], row[twstats.SCORING_AVERAGE],
+                        row[twstats.BIRDIE_AVERAGE]))
+
+    # More than the 200 matches DB.matches() returns by default.
+    for n in range(205):
+        auth = 'many%05d' % n
+        add(auth, 'Match.T.East', card(auth, 'amy', 'ben', 18, 72, SCORE0=1))
+    row = twstats.unpack(Stub().stat_record('amy')[:-1])
+    _played, won, _lost, _tied = db.record('amy')
+    if row[twstats.MATCH_WIN] != won - 1:      # the Stroke.T win is not match play
+        fails.append('MY RESUME counts %d match wins; DB.record has %d in all'
+                     % (row[twstats.MATCH_WIN], won))
+    print('scoring: closeout ignored, best %d, %d match wins of %d recorded'
+          % (row[twstats.BEST_ROUND], row[twstats.MATCH_WIN], won))
+    return fails
 
 
 def main():
@@ -179,6 +260,7 @@ def main():
     # through the same codec the server packs `S` with.  0x00272458 reads
     # exactly six fields off a row and derives DROP% from two of them.
     fails += check_columns(db)
+    fails += check_scoring_rounds()
 
     if fails:
         for f in fails:

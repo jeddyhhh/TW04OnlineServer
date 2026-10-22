@@ -1334,20 +1334,35 @@ class Handler(socketserver.BaseRequestHandler):
                                'drives', 'putts', 'holes', 'strokes'), 0)
         longest_drive = longest_putt = 0
         best = None
-        rounds_played = 0
-        for match in DB.matches(persona):
+        rounds_played = round_strokes = round_birdies = 0
+
+        def fold(card):
+            """Add one finished card.  Impossible numbers are already None
+            (twrecords.clean) and count as nothing.  The SCORING lines -- best
+            round, scoring and birdie averages -- take 18-hole rounds only: a
+            Match Play card closed out on the 14th, or one reporting no stroke
+            total, is golf but not a round, and used to become a best round."""
+            nonlocal longest_drive, longest_putt, best
+            nonlocal rounds_played, round_strokes, round_birdies
+            for k in total:
+                total[k] += card[k] or 0
+            longest_drive = max(longest_drive, card['longest'] or 0)
+            longest_putt = max(longest_putt, card['longest_putt'] or 0)
+            if card['strokes'] and card['holes'] == 18:
+                rounds_played += 1
+                round_strokes += card['strokes']
+                round_birdies += card['birdies'] or 0
+                best = (card['strokes'] if best is None
+                        else min(best, card['strokes']))
+
+        # limit=None: the default stops at the newest 200 matches, which capped
+        # the W-L-T record below while DB.record counted them all.
+        for match in DB.matches(persona, limit=None):
             mine = next(p for p in match['players'] if p['name'] == persona)
             kind = 'Match' if match['room'].startswith('Match') else 'Stroke'
             by_kind[kind].append((match, mine))
             if mine['done'] and not mine['quit']:
-                for k in total:
-                    total[k] += mine[k]
-                longest_drive = max(longest_drive, mine['longest'])
-                longest_putt = max(longest_putt, mine['longest_putt'])
-                if mine['strokes']:
-                    rounds_played += 1
-                    best = (mine['strokes'] if best is None
-                            else min(best, mine['strokes']))
+                fold(twrecords.clean(dict(mine)))
 
         # Tournament rounds are golf too: EVERY one this persona played
         # (`tourney_log` -- replays included, as on the web site; only the
@@ -1364,14 +1379,7 @@ class Handler(socketserver.BaseRequestHandler):
                 continue
             if not card['done'] or card['quit'] or not card['holes']:
                 continue
-            for k in total:
-                total[k] += card[k] or 0
-            longest_drive = max(longest_drive, card['longest'] or 0)
-            longest_putt = max(longest_putt, card['longest_putt'] or 0)
-            if card['strokes']:
-                rounds_played += 1
-                best = (card['strokes'] if best is None
-                        else min(best, card['strokes']))
+            fold(card)
 
         career = DB.tourney_career(persona, twtourney.payout)
         points = self.standing(persona)[1]
@@ -1394,7 +1402,7 @@ class Handler(socketserver.BaseRequestHandler):
         if best is not None:
             values[twstats.BEST_ROUND] = best
             values[twstats.SCORING_AVERAGE] = int(round(
-                total['strokes'] / float(rounds_played)))
+                round_strokes / float(rounds_played)))
 
         # The derived lines.  Each is guarded by its own denominator, because a
         # persona with no finished rounds has zeros everywhere and the client
@@ -1411,7 +1419,7 @@ class Handler(socketserver.BaseRequestHandler):
                 total['holes'] / float(total['eagles'])))
         if rounds_played:
             values[twstats.BIRDIE_AVERAGE] = int(round(
-                total['birdies'] / float(rounds_played)))
+                round_birdies / float(rounds_played)))
 
         for kind, fields in (
                 ('Match', (twstats.MATCH_WIN, twstats.MATCH_LOSS,
