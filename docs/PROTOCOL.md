@@ -5431,3 +5431,82 @@ logs which case applied. `tests/lobbyd_addresstest.py` covers five cases:
 two networks, one router with real PS2s, one router with PCSX2 Sockets, a
 LAN server, and a PS2 mixed with a PCSX2.
 
+
+## 66. The peer-to-peer handshake (CommUDP), and a relay
+
+The lobby only introduces the two consoles; the match itself is DirtySDK
+CommUDP over UDP 3658, and **all of it runs on the IOP, in `DSOCKF.IRX`**,
+which still carries its symbol table. The EE side does no networking of its
+own here: it formats a connection string and sends the RPC `'gmut' 'conn'`
+(0x0027AA50, through 0x002B77D0).
+
+**Who listens.** 0x0028B1F0 decides the role. The host takes 0x0027AB40,
+mode 0x101; the guest 0x0027ABC0, mode 0x102. `NetGameUtilConnect` (IOP
+0xBBD8) calls CommUDPListen for `mode & 1` and CommUDPConnect for `mode & 2`.
+Before either, the console tries LAN discovery for 10 s; only if that fails
+does it use the `+ses` address. The host path formats ADDR (peer+0x40,
+0x0028B4B0); the guest's stock fallback formats FROM (peer+0x20, 0x0028B5F0),
+the opponent's *name*, which the fixed patch changes to ADDR.
+
+**The connection string** is `ip:local:remote`. `SockaddrInParse2` (0xF244)
+reads the first port as the local bind port and the second as the remote
+one, and ignores anything after. Both EE helpers append `:3658` twice (the
+literal at 0x00312238), so a bare address in ADDR means "bind 3658, send to
+3658". Listen fails outright if the bind fails; Connect retries on an
+ephemeral port.
+
+**The packets** (CommUDPWrite, 0x005C, sends `[u32 seq][u32 ack][body]`
+IOP-native, so little endian -- inferred from the code, not yet captured):
+
+| packet | words | sent by |
+|---|---|---|
+| INIT | `1, ident` (ident a non-zero random word) | the guest, every 1000 ms until answered |
+| INIT-ACK | `2, ident` | the host, accepting |
+| DISC | `3, ...` | either, closing |
+| POKE | `5, 0` | the host, every 1000 ms while listening |
+
+- The guest's INIT loop is CommUDPThreadData 0x0D88..0x0DB0, calling
+  CommUDPProcessInit (0x0254) whenever 1000 ms have passed in state 2.
+- The host's POKE loop is 0x0E30..0x0E68: in state 3 (listening), **with a
+  remote address set**, every 1000 ms it calls CommUDPProcessPoke (0x08F0),
+  an 8-byte write to that address.
+- The listener **accepts the first INIT from any source**, copies the
+  sender's address into its peer (0x106C), and goes to state 4.
+- A connector that receives a POKE **re-targets its peer to the POKE's
+  source** (0x0FCC..0x1034).
+- From then on every packet has to come from exactly that peer:
+  `SockaddrCompare` (0xEE78) checks family, port and address.
+- The EE gives up after 30 s of connecting (0x0028B500, 0x0028B640); an open
+  link closes after 120 s with nothing received (0x1D4C1 ms).
+
+So there is no NAT traversal, but **both sides send first**: the host to the
+address it was handed, the guest likewise. That is all a relay needs.
+
+**The relay** (`twrelay.py`, `lobbyd.py --relay PUBLIC_IPV4`). Both consoles
+are given the relay's public address in `+ses ADDR`. When the challenge is
+accepted, the lobby reserves a route for that session, keyed by the two
+players' lobby source addresses. The first POKE from the host's address
+teaches the relay the host's public ip:port, whatever its router chose; the
+first INIT from the guest's address does the same for the guest. Both are
+pinned, POKEs are dropped (they only open the host's mapping), and everything
+else is forwarded byte for byte through the one socket, which is what the
+consoles' exact source check requires. An INIT that arrives before the host is
+known is dropped; the guest sends another a second later.
+
+Because the role is in the packet, two players behind one public IP work:
+they differ by router port. The one case that could be ambiguous -- two
+matches whose hosts (or guests) share an address and are both still unlearned
+-- is refused when the second is agreed: the completing `chal` gets the error
+`rely`, and the other console a `revoke` from its opponent.
+
+Not yet done: a console on the relay machine itself cannot play, because the
+relay holds UDP 3658 there. Making the host's helper use ADDR verbatim
+(0x0027AB68, `addiu a1, a1, 0x0FE0` -> `0x0FE8`, the existing `"%s"` format)
+would let the server hand it `ip:3659:3658`; that needs its own patch and is
+left for later.
+
+**Status.** Loopback-tested (`tests/lobbyd_relaytest.py`). An earlier relay
+in another server, which assumed the host's address instead of learning it,
+carried two complete Internet matches with the host on the relay machine.
+Learning both ends as above has not been played live yet: two remote players,
+each behind its own NAT with no port forwards, are still to be tried.

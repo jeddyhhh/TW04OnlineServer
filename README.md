@@ -49,6 +49,7 @@ screen, read from the game's executable and a live console -- is written up in
 - [How it fits together](#how-it-fits-together)
 - [Running it for real](#running-it-for-real)
 - [How players connect](#how-players-connect)
+- [Playing without port forwards](#playing-without-port-forwards)
 - [Looking after it](#looking-after-it)
 - [Options](#options)
 - [Files it creates](#files-it-creates)
@@ -71,10 +72,13 @@ screen, read from the game's executable and a live console -- is written up in
 | 10200 | TCP | the lobby (`lobbyd.py`); consoles connect straight to it |
 | 10202 | TCP | EA Messenger (buddy lists, presence, messages), inside `lobbyd.py` |
 | 8080 | TCP | the web site (`webui.py`), or whatever you put in front of it |
+| 3658 | UDP | only with `--relay`: matches, relayed so no player needs a port forward |
 
 The game itself (a match between two players) is peer-to-peer over **UDP 3658**
-directly between the players. It never goes through this server; see
-[Known limits](#known-limits).
+directly between the players, and by default never goes through this server;
+see [Known limits](#known-limits). With `--relay` it goes through this server
+instead, and only this server needs the port open; see
+[Playing without port forwards](#playing-without-port-forwards).
 
 ## Quick start
 
@@ -130,6 +134,7 @@ The supporting modules, for anyone reading the code:
 | `twrecords.py` | player pages, stat leaders, records, course pages, and the news digest |
 | `twtourney.py` | the online tournament calendar and its wire format |
 | `twstats.py` | the packed statistics record, and the course list |
+| `twrelay.py` | the optional UDP relay for matches (`--relay`) |
 | `tagfield.py`, `eacrypt.py` | EA's message encoding and the login password cipher |
 | `make_pnach.py` | builds the game patch |
 | `twlog.py` | the size-capped log both programs write |
@@ -161,6 +166,7 @@ Settings are at the top of the script, or can be given in the environment:
 | `LOBBY_PORT` | `10200` | the lobby's TCP port |
 | `BUDDY_PORT` | `10202` | EA Messenger's TCP port; empty to run without it |
 | `BUDDY_ADDR` | *(empty)* | `host:port` to give consoles for Messenger, if this machine's own address isn't the public one (behind NAT) |
+| `RELAY` | *(empty)* | this machine's public IPv4, to relay matches so players need no port forward (`--relay`) |
 | `WEB_HOST` | `127.0.0.1` | where the web site listens; keep it local behind a reverse proxy |
 | `WEB_PORT` | `8080` | the web site's port |
 | `WEB_BASE` | `/TW04Online` | the path the site is served under |
@@ -261,6 +267,42 @@ console yet.** If you do, whether they work or not, please
 happened.
 It works with **Tiger Woods PGA Tour 2004, USA (NTSC-U), serial `SLUS-20757`,
 CRC `64F9781E`**, and no other release.
+
+## Playing without port forwards
+
+The game has no NAT traversal of its own, but it does not need one: both
+consoles of a match send first. The host sends a small "poke" every second to
+the address it was given, and the guest sends its connection request every
+second (the details, from the game's network module, are in
+[docs/PROTOCOL.md](docs/PROTOCOL.md#66-the-peer-to-peer-handshake-commudp-and-a-relay)). So
+if both are given this server's address, each opens its own path through its
+router, and the lobby can forward between them:
+
+```bash
+python3 lobbyd.py --relay 203.0.113.9      # this machine's public IPv4
+```
+
+- Open (or forward) **UDP 3658** to this machine. That's the only port
+  forward involved, and it's the operator's, not the players'.
+- Players need a patch that includes the guest address fix at 0x0028B5F0
+  (`make_pnach.py`). Without it, the joining console dials its opponent's
+  *name* instead of the address it was given whenever LAN discovery fails.
+- Players behind one public IP (a household, carrier-grade NAT) are told apart
+  by the port each one's router picked. If a second match from the same
+  address is agreed in the few seconds before the first has connected, it is
+  refused with a message to challenge again.
+- A match's route is reserved when the challenge is accepted and released
+  when its result arrives, when a console is back in the lobby, or after 60
+  seconds if it never connects, 2 minutes of silence, or 6 hours.
+- Nobody can play from the relay machine itself, because the relay holds UDP
+  3658 there. (A one-instruction client patch can move that console to
+  another local port; that is not part of this server yet.)
+- Admission is by address, not cryptography: the relay forwards only for
+  matches the lobby agreed, and only between the two addresses those players
+  logged in from.
+
+Relayed matches have been tested on loopback (`tests/lobbyd_relaytest.py`);
+they have not yet been played across the internet through this server.
 
 ## Looking after it
 
@@ -384,6 +426,8 @@ The most useful ones; `--help` on either program lists them all.
 | `--backup-keep N` | `7` | daily database copies to keep; `0` turns backups off |
 | `--backup-dir DIR` | `data/backups` | where the daily copies go |
 | `--open` | | create an account on first login instead of refusing it (LAN only) |
+| `--relay IPV4` | | relay matches through this server: its public IPv4, with UDP 3658 open (off by default) |
+| `--relay-bind ADDR` / `--relay-port N` | `0.0.0.0` / `3658` | where the relay listens; consoles always send to port 3658 |
 | `--logfile FILE` | `logs/lobbyd.log` | the log; `''` for none |
 | `--quiet` | | log to the file only, not the terminal too |
 | `--log-max-mb` / `--log-keep` | `10` / `3` | log rollover size and copies kept |
@@ -433,6 +477,7 @@ drives it the way the game does:
 python3 tests/lobbyd_selftest.py      # message format and the password cipher
 python3 tests/lobbyd_authtest.py      # only real credentials get in
 python3 tests/lobbyd_roomtest.py      # rooms, challenges, rematches
+python3 tests/lobbyd_relaytest.py     # the UDP relay, alone and behind the lobby
 python3 tests/lobbyd_addresstest.py   # which address each console is given for peer to peer
 python3 tests/twdb_resettest.py       # --reset-stats keeps the accounts and wipes the rest
 python3 tests/lobbyd_livetest.py      # the live picture the web site reads
@@ -445,7 +490,7 @@ python3 tests/webui_featurestest.py   # event, h2h, compare, Hall of Fame and ad
 ```
 
 Most modules also test themselves: `python3 twrecords.py`, `twlog.py`,
-`twtourney.py`, `twstats.py`, `tagfield.py` and `eacrypt.py`.
+`twtourney.py`, `twstats.py`, `twrelay.py`, `tagfield.py` and `eacrypt.py`.
 
 ## Troubleshooting
 
@@ -456,9 +501,12 @@ Most modules also test themselves: `python3 twrecords.py`, `twlog.py`,
   `--port`: a port mismatch looks exactly like a server that's down.
 - **Players get into the lobby, but matches never start.** The two players have
   to reach each other on UDP 3658, as the lobby only introduces them. Check each
-  player can receive on that port (a port forward, behind a home router). On
-  Linux or a Steam Deck, check the Ethernet Device is set to **Auto**. Wi-Fi
-  networks that isolate devices from each other also break this.
+  player can receive on that port (a port forward, behind a home router), or
+  run the lobby with `--relay` so nobody has to. On Linux or a Steam Deck,
+  check the Ethernet Device is set to **Auto**. Wi-Fi networks that isolate
+  devices from each other also break this. Through the relay, the log says
+  `relay learned the host` and `... the guest` as each console's first packet
+  arrives; a side that is never learned never reached the relay.
 - **The DNAS screen takes 30 seconds or more.** Set DNS1 in PCSX2 to a real
   resolver (see [How players connect](#how-players-connect)).
 - **What happened to that connection?** `logs/lobbyd.log` records every
@@ -467,11 +515,12 @@ Most modules also test themselves: `python3 twrecords.py`, `twlog.py`,
 
 ## Known limits
 
-- **Matches are peer-to-peer.** The two consoles play each other directly over
-  UDP 3658, and there's no relay. Each player needs that port reachable (a port
-  forward behind a home router). Two players behind the same router can play
-  each other through an internet-hosted lobby only if their router supports
-  "hairpin" NAT (NAT loopback); many do.
+- **Matches are peer-to-peer unless you relay them.** By default the two
+  consoles play each other directly over UDP 3658, so each player needs that
+  port reachable (a port forward behind a home router), and two players behind
+  the same router can play each other through an internet-hosted lobby only if
+  their router supports "hairpin" NAT (NAT loopback). `--relay` removes both;
+  see [Playing without port forwards](#playing-without-port-forwards).
 - **IPv4 only, for players.** The game can only express IPv4 addresses. The
   lobby can listen on IPv6 (`--host ::`), but a player connecting over IPv6
   can't be introduced to an opponent.

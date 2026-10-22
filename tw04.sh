@@ -43,6 +43,9 @@ LOBBY_PORT=${LOBBY_PORT:-10200}
 # needed behind NAT, where this machine's own address is not the public one.
 BUDDY_PORT=${BUDDY_PORT-10202}
 BUDDY_ADDR=${BUDDY_ADDR:-}
+# The UDP relay for matches (see README, "Playing without port forwards"): set
+# RELAY to this machine's public IPv4 and open UDP 3658 to turn it on.
+RELAY=${RELAY:-}
 
 RESTART_DELAY=${RESTART_DELAY:-3}
 
@@ -64,6 +67,7 @@ command_for() {
         # lobbyd runs Messenger by default, so "off" has to be said out loud.
         cmd="$cmd --buddy-port ${BUDDY_PORT:-0}"
         [ -n "$BUDDY_ADDR" ] && cmd="$cmd --buddy-addr $BUDDY_ADDR"
+        [ -n "$RELAY" ] && cmd="$cmd --relay $RELAY"
         echo "$cmd"
         ;;
     webui)  echo "$PYTHON $HERE/webui.py --host $WEB_HOST --port $WEB_PORT --base-path $WEB_BASE --trust-proxy --quiet --logfile $LOGS/webui.log --log-max-mb $LOG_MAX_MB --log-keep $LOG_KEEP" ;;

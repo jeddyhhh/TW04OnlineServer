@@ -39,6 +39,7 @@ import tagfield
 import twdb
 import twlog
 import twrecords
+import twrelay
 import twstats
 import twtourney
 
@@ -113,6 +114,8 @@ def rig_config():
 
 ARGS = None
 DB = None
+# The UDP relay for the peer-to-peer leg (twrelay), when --relay turns it on.
+RELAY = None
 # The day the --probe-conditions layout counts from: the server's today when it
 # started, so the layout cannot slide under a session that runs past midnight.
 PROBE_ANCHOR = None
@@ -544,7 +547,7 @@ def push_to(persona, kind, tags):
     return False
 
 
-def start_session(a, b):
+def start_session(a, b, auth=None):
     """Push `+ses` to both halves of an agreed match.
 
     `+ses` is the match-start push.  Its handler is inline in the connection
@@ -593,7 +596,7 @@ def start_session(a, b):
             # way to know which of the two numbered columns is whose.  It used
             # to be the constant 'tw04-local', so every match in the database
             # looked like the same one.
-            'auth': secrets.token_hex(8),
+            'auth': auth or secrets.token_hex(8),
         }
         SESSIONS[pair] = session
         # Results turn up long after both consoles have disconnected, so the
@@ -634,7 +637,9 @@ def start_session(a, b):
     # ends up sending to its own public IP and the router has to hairpin it
     # back.  Plenty do not, and the symptom is a match that is agreed in the
     # lobby and then never starts -- with nothing in this log to say why.
-    if same_network(a, b):
+    if RELAY:
+        log('***', '    both consoles are given the relay, %s' % ARGS.relay)
+    elif same_network(a, b):
         if lan_address(a) and lan_address(b):
             log('***', '    %s and %s share one network (%s) -- each is given '
                        'the other\'s LAN address (%s, %s)'
@@ -648,7 +653,10 @@ def start_session(a, b):
                        '--peer-addr.' % (a, b, REACH[a]))
 
     for me, peer in ((a, b), (b, a)):
-        addr, port = peer_address(peer, me)
+        # Through the relay both are given its address: each console then
+        # sends to it first and opens its own NAT mapping (see twrelay).
+        addr, port = ((ARGS.relay, '3658') if RELAY
+                      else peer_address(peer, me))
         if not addr:
             log('!!!', '    no endpoint known for %s -- +ses will be useless' % peer)
         push_to(me, '+ses', {
@@ -765,6 +773,18 @@ def publish_live():
         DB.set_live('heartbeat', int(time.time()))
     except Exception as exc:                            # noqa: BLE001
         log('!!!', '    could not publish the live picture: %s' % exc)
+
+
+def release_relay(persona):
+    """`persona` is back in the lobby, so the relay route of any session they
+    were in is no longer needed -- the console only says so after its match
+    ended or never connected.  A result (`rank`) releases it too; anything
+    else is left to the relay's own timeouts."""
+    if not RELAY or not persona:
+        return
+    for pair, session in list(SESSIONS.items()):
+        if persona in pair:
+            RELAY.release(session['auth'])
 
 
 def end_matches(persona, why):
@@ -1262,6 +1282,7 @@ class Handler(socketserver.BaseRequestHandler):
             # still connected who says it is not playing anyone.  At login the
             # persona is not chosen yet, and `pers` closes the match instead.
             end_matches(self.persona, 'is back in the lobby')
+            release_relay(self.persona)
             return
 
         # A real match request.  Both clients send one; the pair is complete
@@ -1270,11 +1291,34 @@ class Handler(socketserver.BaseRequestHandler):
         log('***', '    MATCH %s (host=%s, %s:%s) vs %s (%s:%s)'
             % (self.persona, host, self.peer[0], self.peer[1], who,
                *ONLINE.get(who, ('?', '?'))))
+        theirs = MATCHED.get(who)
+        complete = bool(theirs and theirs['opp'] == self.persona)
+        auth = None
+        if complete and RELAY and frozenset((self.persona, who)) not in SESSIONS:
+            # The route is reserved before anyone is told to play, so a relay
+            # that cannot take the match refuses it rather than handing out an
+            # address that will never answer.
+            auth = secrets.token_hex(8)
+            first = self.persona if host == '1' else who
+            second = who if first == self.persona else self.persona
+            try:
+                RELAY.register(auth, dotted_quad(REACH.get(first)),
+                               dotted_quad(REACH.get(second)))
+            except ValueError as exc:
+                for p in (self.persona, who):
+                    MATCHED.pop(p, None)
+                # The other console was already told to play; the challenge
+                # verb it understands for "never mind" is `revoke`.
+                self.deliver(who, {'N': self.persona, 'T': 'revoke',
+                                   'F': tagfield.flags_encode(
+                                       self.FL_PRIV | self.FL_ATTR3)})
+                return self.fail('chal', 'rely',
+                                 'the relay cannot take this match (%s); '
+                                 'challenge again in a few seconds' % exc)
         self.send('chal', ident, {'~~': 'OK', 'MODE': 'play'})
 
-        theirs = MATCHED.get(who)
-        if theirs and theirs['opp'] == self.persona:
-            start_session(self.persona, who)
+        if complete:
+            start_session(self.persona, who, auth=auth)
 
     # `onln` and `cusr myrnk` are the two ranking requests, both sent by
     # 0x00277060 / 0x00277130 and both rate-limited by the client to one every
@@ -2438,6 +2482,8 @@ class Handler(socketserver.BaseRequestHandler):
                 log('***', '    new challenge between %s and %s -- the earlier '
                            'session (seed=%s) is retired'
                     % (self.persona, target, old.get('seed')))
+                if RELAY:
+                    RELAY.release(old['auth'])
             # Someone issuing a challenge is in the lobby, not in a match -- and
             # so is the player they challenge, but ONLY if that player is
             # connected.  A third player challenging someone away in a real
@@ -2565,6 +2611,8 @@ class Handler(socketserver.BaseRequestHandler):
             DB.stop_playing(token)
         except Exception as exc:                        # noqa: BLE001
             log('!!!', '    could not close the live match: %s' % exc)
+        if RELAY:
+            RELAY.release(token)
         log('***', '    result from %s for %s vs %s in %r (%d fields, stored)'
             % (who, ses['host'], ses['guest'], ses['room'], len(fields)))
         note('result', '%s vs %s finished in %s'
@@ -3020,6 +3068,19 @@ def main(argv=None):
                          'backend every PS2 is 192.0.2.100, so the reported '
                          'address is useless and lobbyd substitutes the host '
                          'it was reached on; use this to override that.')
+    ap.add_argument('--relay', metavar='PUBLIC_IPV4',
+                    help='relay the peer-to-peer leg through this server, so '
+                         'no player needs a port forward: both consoles are '
+                         'given this address in +ses ADDR.  It must be this '
+                         'machine\'s public IPv4, with UDP 3658 reaching '
+                         '--relay-port.  Off by default.')
+    ap.add_argument('--relay-bind', default='0.0.0.0', metavar='ADDR',
+                    help='the local IPv4 address the relay listens on')
+    ap.add_argument('--relay-port', type=int, default=3658,
+                    help='the local UDP port the relay listens on.  Consoles '
+                         'always send to port 3658 (the game appends '
+                         '":3658:3658" to ADDR), so anything else needs a '
+                         'router or firewall rule mapping 3658 to it.')
     ap.add_argument('--ping', type=float, default=20.0,
                     help='seconds between `~png` keepalives; the client drops '
                          'the session after 60 s of silence, so keep this well '
@@ -3149,6 +3210,24 @@ def main(argv=None):
     else:
         log('***', 'keepalive DISABLED -- expect a disconnect after 60s idle')
 
+    if ARGS.relay:
+        try:
+            socket.inet_pton(socket.AF_INET, ARGS.relay)
+        except OSError:
+            ap.error('--relay takes the public IPv4 address consoles can reach')
+        if ARGS.peer_addr:
+            ap.error('--relay and --peer-addr both set the +ses ADDR; '
+                     'choose one')
+        global RELAY
+        RELAY = twrelay.Relay(ARGS.relay_bind, ARGS.relay_port, log=log)
+        try:
+            RELAY.start()
+        except OSError as exc:
+            ap.error('the relay could not listen on UDP %s:%d (%s)'
+                     % (ARGS.relay_bind, ARGS.relay_port, exc))
+        log('***', 'UDP relay on: consoles are told to play through %s:3658'
+            % ARGS.relay)
+
     if ARGS.buddy_port:
         buddy = Server((ARGS.host, ARGS.buddy_port), BuddyHandler)
         threading.Thread(target=buddy.serve_forever, daemon=True).start()
@@ -3161,6 +3240,8 @@ def main(argv=None):
         except KeyboardInterrupt:
             PING.set()
             CALENDAR.set()
+            if RELAY:
+                RELAY.close()
             # Say so, so the web site reports the server as down rather than
             # leaving its last heartbeat to go stale over the next few minutes.
             try:
