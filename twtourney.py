@@ -261,6 +261,119 @@ def holiday(day):
     d = from_day(day)
     return SPECIAL_DAYS.get((d.month, d.day))
 
+
+# THE FOUR-DAY EVENTS.  The game's own PGA TOUR season names its majors without
+# naming the real ones -- LOADONCE.PS2's `PGAn` chunk (docs/PROTOCOL.md, section
+# 66) lists a Southern, a US, a UK and a PGA TOUR Major Championship beside THE
+# PLAYERS -- so the online calendar uses the same names, in the real events'
+# weeks: Thursday to the Sunday they finish on.
+#
+# Each is four ordinary daily events, "<name> R1" to "R4", on one course with
+# one set of conditions.  Nothing in the client knows an event can last more
+# than a day; the server is what adds the rounds up.  A player gets ONE round a
+# day -- the first they start (lobbyd.on_esr2t declines a second) -- the board
+# on each day is the running total of everyone who has completed every day so
+# far, and the purse is paid once, on the last day's 72-hole standings.
+#
+# Every other weekend is the same thing over three days: Friday's own drawn
+# event, played Friday to Sunday as "<name> R1".."R3" (weekend_rounds).
+#
+# The courses are a pool per event, rotating by year.  Only the Southern Major
+# at Pinehurst No. 2 is the game's own choice; the rest are venues those events
+# have really used, or something like them, picked by hand -- the season's
+# course table (`PGAc`) is not decoded yet.
+MAJOR_DAYS = 4                   # a major, Thursday to Sunday
+WEEKEND_DAYS = 3                 # any other weekend, Friday to Sunday
+WEEKEND_PURSE = 1.5              # times Friday's own purse, paid once
+MAJOR_ICON = 4                   # the gold star
+#        name, month, which Sunday it ends on, purse, conditions, course pool
+MAJORS = (
+    ('THE PLAYERS Championship', 3, 3, 12000000, {'greens': 'Fast'},
+     (2,)),                                  # TPC at Sawgrass
+    ('Southern Major Championship', 4, 2, 15000000, {'greens': 'Fast'},
+     (20, 8, 16)),                           # Pinehurst, Bay Hill, Sahalee
+    ('PGA TOUR Major Championship', 5, 3, 15000000, {'rough': 'Long'},
+     (5, 16, 20)),                           # Bethpage, Sahalee, Pinehurst
+    ('US Major Championship', 6, 3, 15000000,
+     {'rough': 'Long', 'greens': 'Fast'},
+     (0, 5, 20, 14)),                        # Pebble, Bethpage, Pinehurst, Torrey
+    ('UK Major Championship', 7, 3, 15000000, {'fairways': 'Fast'},
+     (15, 6)),                               # St Andrews, Royal Birkdale
+)
+
+
+def nth_sunday(year, month, n):
+    """The date of the n'th Sunday of a month."""
+    first = datetime.date(year, month, 1)
+    return first + datetime.timedelta(days=(6 - first.weekday()) % 7 + 7 * (n - 1))
+
+
+def major_event(day):
+    """The four-day event `day` is a round of, as an event dict with `series`
+    (its first day) and `round`, or None for an ordinary day."""
+    d = from_day(day)
+    for name, month, nth, purse, conditions, pool in MAJORS:
+        if d.month != month:
+            continue
+        last = nth_sunday(d.year, month, nth)
+        first = last - datetime.timedelta(days=MAJOR_DAYS - 1)
+        if not first <= d <= last:
+            continue
+        rnd = (d - first).days + 1
+        return {'day': day, 'name': ('%s R%d' % (name, rnd))[:NAME_MAX],
+                'course': pool[d.year % len(pool)], 'purse': purse,
+                'conditions': dict(conditions), 'icon': MAJOR_ICON,
+                'series': to_day(first), 'round': rnd}
+    return None
+
+
+def majors_between(first, last):
+    """Every round of a four-day event from day `first` to day `last`."""
+    return [e for e in (major_event(d) for d in range(first, last + 1)) if e]
+
+
+def series_days(first):
+    """How many days the multi-day event starting on day `first` runs.  The
+    first day says which kind it is: majors start on a Thursday, weekend
+    events on a Friday."""
+    return MAJOR_DAYS if from_day(first).weekday() == 3 else WEEKEND_DAYS
+
+
+def series_last(event):
+    """The day an event's standings are final: its own day, or the last round
+    of a multi-day event."""
+    series = (event or {}).get('series')
+    return series + series_days(series) - 1 if series else event['day']
+
+
+def weekend_first(day):
+    """The Friday of the weekend event `day` would be a round of, or None for
+    Monday to Thursday and for a major's weekend."""
+    weekday = from_day(day).weekday()
+    if weekday < 4 or major_event(day):
+        return None
+    return day - (weekday - 4)
+
+
+def weekend_rounds(friday):
+    """A weekend event made from Friday's ordinary event (`friday`, an event
+    dict): its three rounds on Friday's course and conditions, at
+    WEEKEND_PURSE times Friday's purse.  Each round keeps its own day's
+    holiday icon; the name, like the course, is Friday's."""
+    first = friday['day']
+    name = friday['name'][:NAME_MAX - 3].rstrip()
+    purse = int(round(friday['purse'] * WEEKEND_PURSE / 50000)) * 50000
+    out = []
+    for rnd in range(1, WEEKEND_DAYS + 1):
+        day = first + rnd - 1
+        special = holiday(day)
+        out.append({'day': day, 'name': '%s R%d' % (name, rnd),
+                    'course': friday['course'], 'purse': purse,
+                    'conditions': dict(friday.get('conditions') or {}),
+                    'icon': special[0] if special else ICON_DEFAULT,
+                    'series': first, 'round': rnd})
+    return out
+
 # Offsets 4..11 and 15 are unnamed.  One of them almost certainly means "this
 # event needs a password": the client prompted for one while they were all
 # non-zero, and `0x002DE440` only appends the `PASS` tag once the player has
@@ -379,7 +492,34 @@ def seed(text, epoch=0):
 
 
 def generate_month(year, month, courses=None, epoch=0):
-    """A month of events: [{day, name, course, purse}], one per day.
+    """A month of events: [{day, name, course, purse}], one per day, with the
+    multi-day events on top of the daily draw.
+
+    The four-day events go on AFTER the draw, and a weekend copies its Friday:
+    every day still makes the same random calls, so the rest of a month is
+    exactly what it was.  A weekend that starts in the previous month takes
+    that month's Friday."""
+    drawn = {e['day']: e for e in draw_month(year, month, courses, epoch)}
+
+    def friday(day):
+        if day not in drawn:
+            drawn.update((e['day'], e) for e in
+                         draw_month(*month_of(day), courses=courses,
+                                    epoch=epoch))
+        return drawn[day]
+
+    out = []
+    for day in sorted(drawn):
+        first = weekend_first(day)
+        e = (major_event(day)
+             or (weekend_rounds(friday(first))[day - first] if first else None)
+             or drawn[day])
+        out.append(e)
+    return out
+
+
+def draw_month(year, month, courses=None, epoch=0):
+    """A month of ordinary one-day events: [{day, name, course, purse}].
 
     Seeded from the month itself rather than the clock.  That is deliberate:
     the calendar is stored once and served from storage afterwards, so an
@@ -460,6 +600,9 @@ def entries_for(events):
     out = []
     for e in sorted(events, key=lambda e: e['day']):
         icon = e.get('icon')
+        if (icon is None and e.get('series')
+                and series_days(e['series']) == MAJOR_DAYS):
+            icon = MAJOR_ICON
         if icon is None:
             special = holiday(e['day'])
             icon = special[0] if special else ICON_DEFAULT
@@ -924,14 +1067,17 @@ def main():
         fails.append('a harder course must always pay more: %r' % ladder)
     if DIFFICULTY_ORDER.index('Bay Hill Club') != 8:
         fails.append('Bay Hill Club is the 9th hardest')
-    wrong = [e for e in events
+    # One-day events only: a weekend round carries its Friday's conditions and
+    # a weekend purse (7b4 checks those).
+    single = [e for e in events if not e.get('series')]
+    wrong = [e for e in single
              if e['purse'] != event_purse(e['course'], e['conditions'])]
     if wrong:
         fails.append('%d generated events do not carry their course and '
                      'conditions purse' % len(wrong))
 
     # 7a3. conditions: valid, stable per day, on the wire, and priced
-    for e in events:
+    for e in single:
         c = e['conditions']
         if set(c) != set(EVENT_SETTINGS) or any(
                 c[s] not in CONDITIONS[s] for s in c):
@@ -972,6 +1118,8 @@ def main():
     # 7b1. holidays get their icon and their name, and names fit the field
     for (mm, dd), (icon, label) in SPECIAL_DAYS.items():
         when = to_day(datetime.date(2027, mm, dd))
+        if major_event(when) or weekend_first(when):  # a multi-day event
+            continue                                   # takes the day
         ev = [e for e in generate_month(2027, mm) if e['day'] == when]
         if not ev:
             fails.append('%s is not in the generated month' % label)
@@ -988,7 +1136,9 @@ def main():
         fails.append('%d name(s) longer than the %d-character field: %r'
                      % (len(over), NAME_MAX, over[:2]))
     # an ordinary day is a golf ball, not a heart
-    plain = [e for e in generate_month(2027, 6) if not holiday(e['day'])]
+    plain = [e for e in generate_month(2027, 6)
+             if not holiday(e['day']) and not major_event(e['day'])
+             and not weekend_first(e['day'])]
     if any(e['icon'] != ICON_DEFAULT for e in plain):
         fails.append('an ordinary day should carry the default icon')
     # No two special days may share an icon -- the whole point is that each
@@ -1022,6 +1172,77 @@ def main():
     print('courses: %d playable, %d excluded (%s), 24 months clean'
           % (len(TOURNEY_COURSES), len(UNPLAYABLE_COURSES),
              ' '.join(str(c) for c in UNPLAYABLE_COURSES)))
+
+    # 7b3. the four-day events: their 2026 weeks, courses, purses and icons,
+    # and a generated month that carries them
+    weeks = {'THE PLAYERS Championship': ('2026-03-12', 2, 12000000),
+             'Southern Major Championship': ('2026-04-09', 8, 15000000),
+             'PGA TOUR Major Championship': ('2026-05-14', 16, 15000000),
+             'US Major Championship': ('2026-06-18', 20, 15000000),
+             'UK Major Championship': ('2026-07-16', 15, 15000000)}
+    for label, (start, course, purse) in sorted(weeks.items()):
+        first = to_day(datetime.date.fromisoformat(start))
+        if major_event(first - 1) or major_event(first + MAJOR_DAYS):
+            fails.append('%s should run four days from %s' % (label, start))
+        for n in range(MAJOR_DAYS):
+            e = major_event(first + n) or {}
+            want = ('%s R%d' % (label, n + 1), course, purse, first, MAJOR_ICON)
+            got = (e.get('name'), e.get('course'), e.get('purse'),
+                   e.get('series'), e.get('icon'))
+            if got != want:
+                fails.append('%s day %d: %r, expected %r' % (label, n + 1, got,
+                                                            want))
+        if series_last(major_event(first)) != first + MAJOR_DAYS - 1:
+            fails.append('%s should be decided on its Sunday' % label)
+        if len(major_event(first)['name']) > NAME_MAX:
+            fails.append('%s does not fit the name field' % label)
+    june = generate_month(2026, 6)
+    stars = [e for e in june if e.get('icon') == MAJOR_ICON]
+    if [e['day'] for e in stars] != list(range(to_day(datetime.date(2026, 6, 18)),
+                                               to_day(datetime.date(2026, 6, 22)))):
+        fails.append('June 2026 should carry the US Major on the 18th to 21st')
+    if entries_for([{'day': stars[0]['day'], 'name': 'x', 'course': 0,
+                     'purse': 1, 'series': stars[0]['series']}])[0][1][
+            ICON_OFFSET] != MAJOR_ICON:
+        fails.append('a stored major day should draw the star')
+    if major_event(to_day(datetime.date(2027, 7, 15)))['course'] != 6:
+        fails.append('the UK Major should rotate to Royal Birkdale in 2027')
+    print('majors:  %d four-day events a year, e.g. %s'
+          % (len(MAJORS), stars[0]['name']))
+
+    # 7b4. any other weekend: three rounds of Friday's event, one series
+    october = generate_month(2026, 10)
+    fri = to_day(datetime.date(2026, 10, 23))
+    weekend = [e for e in october if fri <= e['day'] <= fri + 2]
+    base = draw_month(2026, 10)[fri - october[0]['day']]
+    if ([(e['series'], e['course'], e['purse'], e['name']) for e in weekend] !=
+            [(fri, base['course'],
+              int(round(base['purse'] * WEEKEND_PURSE / 50000)) * 50000,
+              '%s R%d' % (base['name'][:NAME_MAX - 3].rstrip(), n))
+             for n in (1, 2, 3)]):
+        fails.append('Oct 23-25 2026 should be a three-round weekend: %r'
+                     % weekend)
+    if series_last(weekend[0]) != fri + 2 or series_days(fri) != WEEKEND_DAYS:
+        fails.append('a weekend event should be decided on its Sunday')
+    if any(e.get('series') for e in october
+           if from_day(e['day']).weekday() < 4):
+        fails.append('Monday to Thursday should stay one-day events')
+    if entries_for([dict(weekend[0], icon=None)])[0][1][ICON_OFFSET] == MAJOR_ICON:
+        fails.append('a weekend event should not draw the major star')
+    # Oct 30 - Nov 1: the Sunday is November's but the event is October's Friday
+    sunday = [e for e in generate_month(2026, 11)
+              if e['day'] == to_day(datetime.date(2026, 11, 1))][0]
+    if sunday['series'] != to_day(datetime.date(2026, 10, 30)) or \
+            sunday['name'] != [e for e in october
+                               if e['day'] == sunday['series']][0]['name'][:-1] + '3':
+        fails.append('a weekend across two months should be one event: %r'
+                     % sunday)
+    us_open = to_day(datetime.date(2026, 6, 18))
+    if any(e['series'] != us_open for e in june
+           if us_open <= e['day'] <= us_open + 3):
+        fails.append("a major's weekend should not become a weekend event")
+    print('weekends: %s, $%s' % (weekend[0]['name'],
+                                 format(weekend[0]['purse'], ',')))
 
     # 7c. a result entry: the winner's name, the viewer's scores and finish
     r_name, r_data = make_result('JeddyH2', day, winner_score=67,
@@ -1375,6 +1596,16 @@ def to_par(fields, par=None):
         par = int(round(par * holes / 18.0))
     diff = strokes - par
     return 'E' if diff == 0 else '%+d' % diff
+
+
+def row_to_par(row):
+    """To par for a row of a board (twdb.tourney_board): one round against
+    its course, or a four-day event's running total against par for every
+    round it covers -- `par` on such a row is already that sum."""
+    if row.get('rounds', 1) > 1:
+        diff = row['strokes'] - row['par']
+        return 'E' if diff == 0 else '%+d' % diff
+    return to_par(row['fields'], row['par'])
 
 
 # A purse is split down the field.  These are the PGA Tour's own top-ten

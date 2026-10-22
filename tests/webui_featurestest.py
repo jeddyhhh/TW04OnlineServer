@@ -12,6 +12,7 @@ with a lobby on the same database, then:
   with them, and news that the console then shows -- and checks that a wrong
   key gets nothing but a 404.
 """
+import datetime
 import os
 import subprocess
 import sys
@@ -152,6 +153,17 @@ def main():
                     'course': 4, 'purse': 2000000},
                    {'day': today + 3, 'name': 'Future Classic', 'course': 9,
                     'purse': 3000000}])
+    # A finished four-day event: the 2025 US Major, 12 to 15 June.  alice
+    # plays all four rounds, bob too, and carol only the first.
+    major = twtourney.to_day(datetime.date(2025, 6, 12))
+    db.add_events(twtourney.majors_between(major, major + 3))
+    for n in range(4):
+        db.add_tourney('alice', major + n, 5, {'HOLES': 18, 'STROKES': 70,
+                                               'PARS': 18, 'DONE': 1})
+        db.add_tourney('bob', major + n, 5, {'HOLES': 18, 'STROKES': 72,
+                                             'PARS': 18, 'DONE': 1})
+    db.add_tourney('carol', major, 5, {'HOLES': 18, 'STROKES': 66,
+                                       'PARS': 18, 'DONE': 1})
     with open(NEWS, 'w', encoding='utf-8') as f:
         f.write('Old news.\n')
 
@@ -203,6 +215,14 @@ def main():
         check('/event/' + iso(today - 2), 200, '%s &rarr;' % twtourney.from_day(
             today - 1).strftime('%d %b'), absent=('&larr;',))
         check('/event/yesterday', 404, 'not a date')
+        # A four-day event: R1..R4 and the 72-hole total, paid once, on the
+        # last day -- 18% of $15,000,000 -- and carol, who missed rounds, off.
+        check('/event/' + iso(major + 3), 200, 'US Major Championship R4',
+              'Round 4 of 4', 'Final leaderboard', '<th class="num">R4</th>',
+              '<strong>280</strong>', '$2,700,000',
+              absent=('/player/carol',))
+        check('/event/' + iso(major + 1), 200, 'Leaderboard after round 2',
+              '<strong>140</strong>', absent=('$2,700,000', '/player/carol'))
 
         # -- head to head -----------------------------------------------------
         # The sample match: alice 69 beat bob 73 in stroke play.

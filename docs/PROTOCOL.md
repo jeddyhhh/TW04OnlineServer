@@ -5431,3 +5431,71 @@ logs which case applied. `tests/lobbyd_addresstest.py` covers five cases:
 two networks, one router with real PS2s, one router with PCSX2 Sockets, a
 LAN server, and a PS2 mixed with a PCSX2.
 
+## 67. The game's own season, and four-day majors
+
+The career mode's PGA TOUR season is on the disc, in `LOADONCE.PS2`.  It is a
+run of EA chunks: `SHOC` (stored byte-reversed as `COHS`), a 64-byte header
+whose `SHDR` names the chunk's type, then an `Rdat` body -- 0x30 bytes of
+header, the uncompressed size as a u32 at +0x30, and the compressed data from
++0x34.  The types that matter here:
+
+    PGAn    656 bytes   the event names, NUL-separated
+    PGAt   2604 bytes   31 records of 84 bytes: a round count (4), then four
+                        (u32, round 1..4, u32) triples -- the round format,
+                        not the venue
+    PGAc   3100 bytes   31 records of 100 bytes -- not decoded yet
+    PGAp    132 bytes   not looked at
+
+The compression is a small LZ, read byte by byte:
+
+    88 nn          nn literal bytes follow
+    t nn, t in 80..AF with bit 3 set
+                   count = ((t & 7) << 8 | nn); (t >> 4) & 3 is the kind:
+                   0 literal (count bytes follow), 1 repeat the previous
+                   byte count+3 times, 2 count+3 zero bytes
+    t yy, t < 70   copy (t >> 4) + 3 bytes from ((t & 15) << 8 | yy) back
+    7x yy zz       copy 10 + zz bytes from ((x << 8) | yy) back
+
+`PGAn` and `PGAt` decode to exactly their stated sizes and end on the next
+chunk header, which is the check that the format is right.  `PGAc` stops on an
+`E8` token none of the above covers, so there is more to it.
+
+`PGAn` is the season, in order:
+
+    Kapalua Championships, TPC of Scottsdale Open, Hollywood Pro-Am,
+    AT&T Pebble Beach National Pro-Am, Torrey Pines Invitational,
+    Pacific Fire Shootout, Royal Birkdale Invitational,
+    King's Trail Championship, Bay Hill Invitational,
+    THE PLAYERS Championship, Southern Major Championship,
+    RMO Throwback Classic, Tropical Shootout, Championship Venue Tour,
+    Atlantic Crossing, US Major Championship, Aussie Open, Tokyo Challenge,
+    UK Major Championship, Euro Challenge, Dream 18 Invitational,
+    PGA TOUR Major Championship, Sahalee Invitational, Amazon Open,
+    Hamish's Shootout, Nor-Cal Invitational, Challenge at the Glass,
+    RMO Open, THE TOUR Championship, ITG-World Domination, TW Shootout
+
+(Three carry a mark: `THE PLAYERS` as byte 0xA6, and `PGA TOUR` and
+`THE TOUR` as 0xAE, Latin-1's registered sign.  The online names leave them
+out -- the event list only takes printable ASCII, twtourney._ascii.)  So the game names its majors without
+naming the real ones, and the online calendar now uses the same names:
+`twtourney.MAJORS` puts THE PLAYERS and the four majors in their real weeks,
+Thursday to the Sunday they finish on (third Sunday of March, second of April,
+third of May, June and July), with a $12,000,000 or $15,000,000 purse and the
+gold-star icon (4).
+
+**The venues are not from the game.**  `PGAc` is where they would be, and it
+is not decoded.  The pools in `twtourney.MAJORS` are a choice -- real venues
+of those events that are in TW04, rotating by year -- except the Southern
+Major at Pinehurst No. 2, which is the game's own.
+
+A major is four ordinary daily events on one course and one set of
+conditions, `<name> R1` to `R4`; the client has no idea an event can last
+more than a day.  The server adds them up (`twdb.tourney_board`): a player's
+best round of each day counts, each day's board -- the console's daily board
+included -- is the running total of everyone who has posted every day so far,
+and a missed round is off it.  The purse is paid once, on the last day's
+72-hole standings, and a major counts once in events entered, won and top
+finishes.  `events.series` holds the first day; a calendar stored before it
+existed gains its majors (`lobbyd.schedule_majors`) only for an event that has
+not started and has no round on any of its days.
+

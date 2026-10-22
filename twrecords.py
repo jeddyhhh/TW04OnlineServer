@@ -189,16 +189,38 @@ def rounds(db):
     # A tournament round's finishing place in its day's field, as the
     # tournament board gives it: 1 + everyone who scored better, so a tie
     # shares a place.  Only the round that counts has one.
+    #
+    # A round of a four-day event (twtourney.MAJORS) is placed on the running
+    # total instead, among the players who have posted every day so far --
+    # the board the game and the event page show.  `series` is the event's
+    # first day, or None.
+    series_of = {r['day']: r['series'] for r in db.query(
+        'SELECT day, series FROM events WHERE series > 0')}
     days = collections.defaultdict(list)
     for r in done:
         r['place'] = r['field'] = None
+        r['series'] = series_of.get(r['day']) if r['kind'] == 'tourney' else None
         if counts(r) and r['strokes'] is not None:
             days[r['day']].append(r)
-    for field in days.values():
+    events = collections.defaultdict(dict)
+    for day, field in days.items():
+        if series_of.get(day):
+            for r in field:
+                events[series_of[day]].setdefault(
+                    r['persona'].lower(), {})[day] = r
+            continue
         field.sort(key=lambda r: (r['strokes'], r['when']))
         for r in field:
             r['place'] = 1 + sum(o['strokes'] < r['strokes'] for o in field)
             r['field'] = len(field)
+    for first, players in events.items():
+        for day in range(first, first + twtourney.series_days(first)):
+            board = [(sum(mine[d]['strokes'] for d in range(first, day + 1)),
+                      mine[day]) for mine in players.values()
+                     if all(d in mine for d in range(first, day + 1))]
+            for total, r in board:
+                r['place'] = 1 + sum(t < total for t, _ in board)
+                r['field'] = len(board)
 
     done.sort(key=lambda r: r['when'])
     return done
@@ -266,24 +288,36 @@ def _agg(rs):
     }
 
 
+def decides(r):
+    """Whether a tournament round's place decides its event: every one-day
+    event's does, a multi-day event's only on its last day."""
+    return (r.get('series') is None
+            or r['day'] == r['series'] + twtourney.series_days(r['series']) - 1)
+
+
 def tourney_wins(rs, open_day=None):
     """{persona: [winning round, ...]}.  A day's winners are everyone on its
     lowest score -- a tie for 1st is a win for each, as on the tournament
     board -- and only finished days count: `open_day` (default today) is
-    still being played."""
+    still being played.  A four-day event is won once, on its last day's
+    total, and the round listed is that last round."""
     if open_day is None:
         open_day = twtourney.today()
     days = collections.defaultdict(list)
     for r in rs:
-        if (counts(r) and r['strokes'] is not None
+        if (counts(r) and r['strokes'] is not None and decides(r)
                 and r['day'] is not None and r['day'] < open_day):
             days[r['day']].append(r)
     wins = collections.defaultdict(list)
     for field in days.values():
-        low = min(r['strokes'] for r in field)
-        for r in field:
-            if r['strokes'] == low:
-                wins[r['persona']].append(r)
+        if field[0].get('series') is not None:
+            # placed on the 72-hole total by rounds(); a missed day has none
+            won = [r for r in field if r.get('place') == 1]
+        else:
+            low = min(r['strokes'] for r in field)
+            won = [r for r in field if r['strokes'] == low]
+        for r in won:
+            wins[r['persona']].append(r)
     return wins
 
 
@@ -756,7 +790,10 @@ def news(db, now=None, today=None):
                  twtourney.describe_conditions(event.get('conditions'))]
         board = [r for r in rs if counts(r) and r['day'] == today
                  and r['strokes'] is not None]
-        if board:
+        if event.get('series'):
+            lines.append('One round a day: your first start counts.')
+            lines.append(_standing(db, today, 'Leader:'))
+        elif board:
             lead = min(board, key=lambda r: (r['strokes'], r['when']))
             lines.append('Leader: %s %d (%s), %d in the field'
                          % (lead['persona'], lead['strokes'],
@@ -767,7 +804,14 @@ def news(db, now=None, today=None):
 
     past = [r for r in rs if counts(r) and r['day'] == today - 1
             and r['strokes'] is not None]
-    if past:
+    before = db.event(today - 1)
+    if before and before.get('series'):
+        # A multi-day event: its running leader, or its winner on the last day.
+        if db.tourney_board(today - 1, limit=1):
+            sections.append(['YESTERDAY: %s' % before['name'], _standing(
+                db, today - 1, 'Won by' if twtourney.series_last(before)
+                == today - 1 else 'Led by')])
+    elif past:
         win = min(past, key=lambda r: (r['strokes'], r['when']))
         sections.append(['YESTERDAY: %s' % (win['event'] or 'the daily event'),
                          'Won by %s with %d (%s)'
@@ -814,6 +858,18 @@ def news(db, now=None, today=None):
                                      subsequent_indent='  ') or [''])
         out.append('')
     return '\n'.join(out).rstrip('\n')
+
+
+def _standing(db, day, label):
+    """'Leader: Alice 140 (-4) after 2 rounds, 6 in the field' -- the top of
+    a four-day event's running total (twdb.tourney_board)."""
+    board = db.tourney_board(day, limit=1000)
+    if not board:
+        return 'Nobody has posted every round yet.'
+    lead = board[0]
+    return '%s %s %d (%s) after %d round%s, %d in the field' % (
+        label, lead['name'], lead['strokes'], twtourney.row_to_par(lead),
+        lead['rounds'], '' if lead['rounds'] == 1 else 's', len(board))
 
 
 def wrap_news(text):
