@@ -547,6 +547,10 @@ class DB:
         self.run('DELETE FROM personas WHERE account_id = ? AND name = ?',
                  (account_id, name))
 
+    def persona_names(self):
+        """Every persona, oldest first."""
+        return [r['name'] for r in self.query('SELECT name FROM personas ORDER BY id')]
+
     def persona(self, name):
         return self.one('SELECT * FROM personas WHERE name = ?', (name,))
 

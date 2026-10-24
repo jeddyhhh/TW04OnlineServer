@@ -5431,3 +5431,45 @@ logs which case applied. `tests/lobbyd_addresstest.py` covers five cases:
 two networks, one router with real PS2s, one router with PCSX2 Sockets, a
 LAN server, and a PS2 mixed with a PCSX2.
 
+## 68. The STATISTICS screen ranks each statistic on a list of its own
+
+Pressing X on a line of ONLINE GAME MODES -> STATISTICS opens RANKINGS for
+that statistic: RANK, PLAYER NAME, STAT VALUE.  Each one is a `snap` for a
+built-in list, and every one of them used to fall through to the all-time
+board, so LONGEST DRIVE listed points.
+
+The 36 built-in lists have a descriptor each at `0x003027C0`,
+`{ u8 field; u32 type; }`, and `0x00277220` turns a statistic into the list
+that ranks it:
+
+| list | field | | list | field |
+|---|---|---|---|---|
+| 0 | 1 online points | | 15 / 16 / 17 | 10 / 11 / 12 stroke W L T |
+| 1 | 41 scoring average | | 18 / 19 / 20 | 7 / 8 / 9 match W L T |
+| 2 | 43 putts per hole | | 21 / 22 | 13 / 14 streaks |
+| 3 | 44 holes per eagle | | 23 / 24 | 26 / 27 events, wins |
+| 4 | 37 longest drive | | 25 / 26 | 15 / 16 disconnects |
+| 5 | 34 longest putt | | 27 / 28 | 19 / 20 rounds completed |
+| 6 / 7 | 33 / 42 GIR, GIR % | | 29 | 39 best round |
+| 8 | 46 driving accuracy | | 30 | 40 (unknown) |
+| 9 / 10 / 11 | 30 / 31 / 45 eagles, birdies, birdie average | | 31 | 50 earnings |
+| 12 | 32 holes in one | | | |
+
+List 0's own descriptor says field 0, but `0x00277220` sends online points
+there.  Lists 1 and 2 exist but no line opens them, because `0x00277220` has
+no case for 41 or 43; nor for tiger status, fairways hit, match and stroke
+losses, ties or disconnects, which show N/A in the RANK column.
+
+The value column is `P`, drawn as it is -- except where the field's
+descriptor (`0x00302440 + 16 * field`, word `+0x0C`) sets the invert flag:
+best round, scoring average, putts per hole and holes per eagle.  For those
+`0x002727A0` draws `(1 << width) - P`, so the server sends `P` inverted, which
+both draws the real value and, since the client puts the largest `P` on top,
+lists the lowest first.
+
+`lobbyd` now answers each list from the same values the packed record
+carries, best first, ties sharing a rank, and leaves out anyone without a
+value.  The same scheme was checked in PCSX2 against the EA Nation port of
+this server: every line that opens a list showed its own statistic, and holes
+per eagle drew 9 above 13 and best round 53 above 56.
+`tests/lobbyd_statlisttest.py` covers it here.

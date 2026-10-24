@@ -1984,6 +1984,73 @@ class Handler(socketserver.BaseRequestHandler):
     LIST_WEEK_GOLFERS = 35          # GOLFERS OF THE WEEK, a week per row
     LIST_TOURNEY_WINNERS = 33       # TOURNAMENT WINNERS, an event per row
 
+    # The statistic each built-in list ranks by.  0x003027C0 holds a descriptor
+    # per list, { u8 field; u32 type; }, and a line of the STATISTICS screen
+    # opens its rankings through 0x00277220, which turns the line's field into
+    # its list.  13, 14 and 32 have boards of their own above, and 33..35 are
+    # text.  List 0's descriptor names field 0, but 0x00277220 sends ONLINE
+    # POINTS (field 1) there, so that is what it ranks.  Fields with no list --
+    # tiger status, fairways hit, match and stroke losses and ties among them --
+    # show N/A in the RANK column and cannot be opened.
+    STAT_LISTS = {
+        0: twstats.POINTS,
+        1: twstats.SCORING_AVERAGE,     # (no line opens it)
+        2: twstats.PUTTS_PER_HOLE,      # (no line opens it either)
+        3: twstats.HOLES_PER_EAGLE,
+        4: twstats.LONGEST_DRIVE,
+        5: twstats.LONGEST_PUTT,
+        6: twstats.TOTAL_GIR,
+        7: twstats.GIR_PERCENT,
+        8: twstats.DRIVING_ACCURACY,
+        9: twstats.TOTAL_EAGLES,
+        10: twstats.TOTAL_BIRDIES,
+        11: twstats.BIRDIE_AVERAGE,
+        12: twstats.HOLES_IN_ONE,
+        15: twstats.STROKE_WIN,
+        16: twstats.STROKE_LOSS,
+        17: twstats.STROKE_TIE,
+        18: twstats.MATCH_WIN,
+        19: twstats.MATCH_LOSS,
+        20: twstats.MATCH_TIE,
+        21: twstats.STROKE_STREAK,
+        22: twstats.MATCH_STREAK,
+        23: twstats.EVENTS_ENTERED,
+        24: twstats.EVENTS_WON,
+        25: twstats.STROKE_INC,
+        26: twstats.MATCH_INC,
+        27: twstats.STROKE_DONE,
+        28: twstats.MATCH_DONE,
+        29: twstats.BEST_ROUND,
+        30: 40,                         # not filled in by anything yet
+        31: twstats.TOTAL_EARNINGS,
+    }
+
+    def stat_list(self, index):
+        """Everyone with a value for the list's statistic, best first.
+
+        The client puts the largest `P` on top and draws `P` as the value --
+        except for the fields whose descriptor sets the invert flag (best
+        round, scoring average, putts per hole, holes per eagle), where it
+        draws (1 << width) - P instead (0x002727A0).  Sending those inverted
+        draws the real value and puts the lowest on top.  Tied values share a
+        rank.  Measured in PCSX2 (against the same lists on the EA Nation
+        port): holes per eagle drew 9 above 13, and best round 53 above 56.
+        """
+        field = self.STAT_LISTS[index]
+        width, _, _, invert = twstats.FIELDS[field]
+        rows = []
+        for name in DB.persona_names():
+            value = twstats.unpack(self.stat_record(name)[:-1])[field]
+            if value > 0:
+                rows.append({'name': name, 'p': (1 << width) - value if invert else value})
+        rows.sort(key=lambda row: (-row['p'], row['name'].lower()))
+        ranked = []
+        for n, row in enumerate(rows, 1):
+            if not ranked or ranked[-1][1]['p'] != row['p']:
+                rank = n
+            ranked.append((rank, row))
+        return ranked
+
     def weekly_winners(self):
         """Whoever earned most in each week of the season, newest week first."""
         first = twtourney.today() - self.SEASON_DAYS
@@ -2036,8 +2103,9 @@ class Handler(socketserver.BaseRequestHandler):
     def list_rows(self, index):
         """(what this list is, [(rank, row)]) for a `snap` INDEX.
 
-        Three kinds of list share one request.  13, 14 and 32 are fixed -- the
-        match board, the stroke board and golfer of the week.  The tournament
+        Four kinds of list share one request.  13, 14 and 32 are fixed -- the
+        match board, the stroke board and golfer of the week.  Most of 0..31
+        rank one statistic each, for the STATISTICS screen.  The tournament
         boards are not: their index is worked out from the DATE, off the season
         start this server itself declared in `ufpvt` (on_cusr), so the
         same arithmetic has to be done here in reverse.
@@ -2079,6 +2147,10 @@ class Handler(socketserver.BaseRequestHandler):
 
         if index == self.LIST_TOURNEY_WINNERS:
             return 'tournament winners', list(enumerate(self.event_winners(), 1))
+
+        if index in self.STAT_LISTS:
+            field = self.STAT_LISTS[index]
+            return twstats.NAMED.get(field, 'field %d' % field).lower(), self.stat_list(index)
 
         kind, window = self.LISTS.get(index, (None, None))
         rows = DB.leaderboard(kind=kind,

@@ -439,6 +439,7 @@ python3 tests/lobbyd_livetest.py      # the live picture the web site reads
 python3 tests/lobbyd_buddytest.py     # EA Messenger
 python3 tests/lobbyd_reporttest.py    # abuse reports and their private page
 python3 tests/twdb_statstest.py       # scoring real captured rounds
+python3 tests/lobbyd_statlisttest.py  # the STATISTICS screen's rankings, one list per statistic
 python3 tests/twdb_tourneytest.py     # ties, open days, and every match counted
 python3 tests/webui_pagestest.py      # player, stats, records and course pages; the news
 python3 tests/webui_featurestest.py   # event, h2h, compare, Hall of Fame and admin pages; handicaps
