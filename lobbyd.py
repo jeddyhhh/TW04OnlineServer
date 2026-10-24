@@ -544,6 +544,23 @@ def push_to(persona, kind, tags):
     return False
 
 
+def session_name(room_a, room_b, setup):
+    """The name a match is recorded under, whose type decides its leaderboard.
+
+    A challenge made in a room is played under that room's name.  EA
+    Messenger's CHALLENGE works from anywhere in the lobby, so the two players
+    may share no room; then only the setup says which game it is.  MFLG's low
+    bits are the GAME MODE (1 Match Play, 2 Stroke Play), and the match is
+    named `Match.B.Buddy` or `Stroke.B.Buddy`.
+    """
+    if room_a and room_a == room_b:
+        return room_a
+    mode = twstats.mflg_mode(setup)
+    if mode:
+        return '%s.B.Buddy' % mode
+    return room_a or room_b or 'match'
+
+
 def start_session(a, b):
     """Push `+ses` to both halves of an agreed match.
 
@@ -580,7 +597,10 @@ def start_session(a, b):
     if session is None:
         host = a if ma['host'] else b
         other = b if host == a else a
-        name = WHERE.get(a) or WHERE.get(b) or 'match'
+        # pop, not get: a stale setup from an abandoned challenge must not
+        # attach itself to a later match between the same two players.
+        setup = PENDING_SETUP.pop(pair, None)
+        name = session_name(WHERE.get(a), WHERE.get(b), setup)
         session = {
             'host': host,
             'other': other,
@@ -598,9 +618,6 @@ def start_session(a, b):
         SESSIONS[pair] = session
         # Results turn up long after both consoles have disconnected, so the
         # pairing has to outlive this process's memory of it.
-        # pop, not get: a stale setup from an abandoned challenge must not
-        # attach itself to a later match between the same two players.
-        setup = PENDING_SETUP.pop(pair, None)
         DB.add_session(session['auth'], name, host, other, session['seed'],
                        setup=setup)
         log('***', '    SESSION %r: host=%s vs %s, seed=%d'
@@ -1336,6 +1353,8 @@ class Handler(socketserver.BaseRequestHandler):
         best = None
         rounds_played = 0
         for match in DB.matches(persona):
+            if not match['ranked']:
+                continue
             mine = next(p for p in match['players'] if p['name'] == persona)
             kind = 'Match' if match['room'].startswith('Match') else 'Stroke'
             by_kind[kind].append((match, mine))

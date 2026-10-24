@@ -438,6 +438,7 @@ python3 tests/twdb_resettest.py       # --reset-stats keeps the accounts and wip
 python3 tests/lobbyd_livetest.py      # the live picture the web site reads
 python3 tests/lobbyd_buddytest.py     # EA Messenger
 python3 tests/lobbyd_reporttest.py    # abuse reports and their private page
+python3 tests/lobbyd_messengertest.py # Messenger challenges and unranked matches
 python3 tests/twdb_statstest.py       # scoring real captured rounds
 python3 tests/twdb_tourneytest.py     # ties, open days, and every match counted
 python3 tests/webui_pagestest.py      # player, stats, records and course pages; the news

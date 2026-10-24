@@ -78,13 +78,18 @@ def _split(payload):
 
     Both separators are accepted because the client uses both -- newlines for
     anything it builds, spaces for the literals it ships prebuilt.
+
+    A payload with tabs is split on tabs and newlines only.  The `rank` result
+    is sent that way, with an unquoted space inside WHEN
+    (`WHEN=2026.10.24 13:48:49`), which splitting on spaces cut to the date.
     """
+    separators = '\t\n\r' if '\t' in payload else SEPARATORS
     fields, cur, quoted = [], [], False
     for ch in payload:
         if ch == '"':
             quoted = not quoted
             continue
-        if ch in SEPARATORS and not quoted:
+        if ch in separators and not quoted:
             if cur:
                 fields.append(''.join(cur))
                 cur = []

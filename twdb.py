@@ -42,6 +42,7 @@ import time
 
 if __package__ in (None, ''):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import twstats
 import twtourney
 
 # The default is anchored to THIS FILE, not to the working directory.  `lobbyd`
@@ -791,7 +792,10 @@ class DB:
             match = {'auth': row['auth'], 'room': ses['room'],
                      'when': row['played'], 'received': row['received'],
                      'host': ses['host'], 'guest': ses['guest'],
-                     'setup': setup, 'players': []}
+                     'setup': setup, 'players': [],
+                     # RANKED GAME off: kept in the history, left off every
+                     # record, leaderboard and statistic
+                     'ranked': twstats.mflg_ranked(setup)}
             for side, who in (('0', ses['host']), ('1', ses['guest'])):
                 match['players'].append({
                     'name': who,
@@ -826,7 +830,7 @@ class DB:
         played = won = lost = tied = 0
         for m in self.matches(persona, limit=None):
             mine = next(p for p in m['players'] if p['name'] == persona)
-            if not mine['done'] or mine['quit']:
+            if not m['ranked'] or not mine['done'] or mine['quit']:
                 continue
             played += 1
             if m['winner'] is None:
@@ -1657,6 +1661,8 @@ class DB:
         """
         table = {}
         for m in self.all_matches():
+            if not m['ranked']:
+                continue
             if kind and not (m['room'] or '').startswith(kind):
                 continue
             if since is not None and (m['received'] or 0) < since:

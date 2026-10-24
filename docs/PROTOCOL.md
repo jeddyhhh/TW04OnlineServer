@@ -5431,3 +5431,41 @@ logs which case applied. `tests/lobbyd_addresstest.py` covers five cases:
 two networks, one router with real PS2s, one router with PCSX2 Sockets, a
 LAN server, and a PS2 mixed with a PCSX2.
 
+
+## 69. MFLG is the game mode and RANKED GAME
+
+*2026-10-24, from challenges on the EA Nation port of this server.*
+
+Challenges that changed one setting at a time gave these values of `MFLG`:
+
+| Setup | `MFLG` |
+|---|---|
+| Match Play, ranked | 33 |
+| Stroke Play, ranked | 34 |
+| Stroke Play, RANKED GAME off | 2 |
+| Stroke Play, RANKED GAME off, FRONT 9 | 2 |
+
+The low bits are the GAME MODE (1 Match Play, 2 Stroke Play) and `0x20` is
+RANKED GAME. The holes setting isn't in it. `twstats.mflg_mode` and
+`twstats.mflg_ranked` read it.
+
+**Messenger challenges.** EA Messenger's CHALLENGE (a buddy, then
+CHALLENGE, then the same CHALLENGE SETUP) works from anywhere in the lobby,
+so the two players may share no room. The session used to be named after
+whichever room either player was in, or `match`, which put it on the Stroke
+Play board. `session_name` now keeps the room's name only when both
+players are in it; otherwise the match is named `Match.B.Buddy` or
+`Stroke.B.Buddy` from `MFLG`. The console accepts that `+ses NAME` and
+starts the match.
+
+**Unranked matches.** A match with RANKED GAME off still goes in the
+history, but `all_matches` marks it `ranked: False`, and the records,
+leaderboards, STATISTICS and round records leave it out. Matches without a
+stored setup are ranked.
+
+**WHEN keeps its time.** `rank` separates its fields with tabs, and `WHEN`
+has an unquoted space: `WHEN=2026.10.24 13:48:49`. Splitting on spaces cut
+it to the date, and the time landed under `~~`. `tagfield.decode` now splits
+a payload that has tabs on tabs and newlines only.
+
+- Test: `tests/lobbyd_messengertest.py`.

@@ -312,6 +312,33 @@ def describe_cflg(value):
     return ' '.join(parts)
 
 
+# MFLG, the setup's mode word, read from challenges that changed one setting
+# at a time: 33 for Match Play, 34 for Stroke Play, 2 for Stroke Play with
+# RANKED GAME off.  The low bits are the GAME MODE and 0x20 is RANKED GAME.
+MFLG_MODES = {1: 'Match', 2: 'Stroke'}
+MFLG_RANKED = 0x20
+
+
+def _mflg(setup):
+    try:
+        return int((setup or {}).get('MFLG', ''))
+    except (TypeError, ValueError):
+        return None
+
+
+def mflg_mode(setup):
+    """'Match' or 'Stroke' from a challenge setup, or None if it does not say."""
+    value = _mflg(setup)
+    return None if value is None else MFLG_MODES.get(value & 3)
+
+
+def mflg_ranked(setup):
+    """Whether a match counts on the statistics.  A setup without MFLG, like
+    every match recorded before setups were kept, is ranked."""
+    value = _mflg(setup)
+    return value is None or bool(value & MFLG_RANKED)
+
+
 def course_name(index):
     """The course a `COUR` value names, or a readable fallback."""
     try:

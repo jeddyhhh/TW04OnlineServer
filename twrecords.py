@@ -106,6 +106,8 @@ def rounds(db):
     counts()) and `place`/`field` set only on that one."""
     out = []
     for m in db.matches(limit=100000):
+        if not m.get('ranked', True):
+            continue
         setup = m.get('setup') or {}
         course = _int(setup['COUR']) if str(setup.get('COUR', '')).isdigit() \
             else None
